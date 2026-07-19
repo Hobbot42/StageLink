@@ -1,65 +1,11 @@
 #include <Arduino.h>
-#include <WiFi.h>
-#include <esp_now.h>
+#include "ReliableRadio.h"
 #include "StatusLED.h"
 
-unsigned long lastMessageTime = 0;
-
-void sendReply(const uint8_t *mac)
+namespace
 {
-    const char reply[] = "RX ALIVE";
-
-    if (!esp_now_is_peer_exist(mac))
-    {
-        esp_now_peer_info_t peerInfo = {};
-        memcpy(peerInfo.peer_addr, mac, 6);
-        peerInfo.channel = 0;
-        peerInfo.encrypt = false;
-
-        if (esp_now_add_peer(&peerInfo) != ESP_OK)
-        {
-            Serial.println("Failed to add TX peer");
-            return;
-        }
-    }
-
-    esp_err_t result = esp_now_send(
-        mac,
-        (uint8_t *)reply,
-        sizeof(reply)
-    );
-
-    if (result != ESP_OK)
-    {
-        Serial.println("RX ALIVE send failed");
-        return;
-    }
-
-    Serial.println("Sent: RX ALIVE");
-    StatusLED::setReady();
-}
-
-
-void onDataReceive(
-    const uint8_t *mac,
-    const uint8_t *data,
-    int length
-)
-{
-    lastMessageTime = millis();
-
-    Serial.print("Received: ");
-
-    for(int i = 0; i < length; i++)
-    {
-        Serial.print((char)data[i]);
-    }
-
-    Serial.println();
-
-    StatusLED::setReady();
-
-    sendReply(mac);
+unsigned long cueFlashUntil = 0;
+StageLink::ReliableRadio radio;
 }
 
 void setup()
@@ -69,19 +15,15 @@ void setup()
     StatusLED::begin();
     StatusLED::setOffline();
 
-    WiFi.mode(WIFI_STA);
-
     Serial.println();
     Serial.println("StageLink RX");
-    Serial.println("Starting ESP-NOW...");
+    Serial.println("Starting reliable radio...");
 
-if (esp_now_init() != ESP_OK)
-{
-    Serial.println("ESP-NOW failed");
-    return;
-}
-
-esp_now_register_recv_cb(onDataReceive);
+    if (!radio.begin())
+    {
+        Serial.println("Radio failed");
+        return;
+    }
 
     Serial.println("RX Ready");
 }
@@ -89,10 +31,43 @@ esp_now_register_recv_cb(onDataReceive);
 
 void loop()
 {
-    if (millis() - lastMessageTime > 3000)
+    radio.update();
+
+    StageLink::Packet packet;
+    while (radio.receive(packet))
+    {
+        if (packet.type == StageLink::PacketType::Heartbeat)
+        {
+            Serial.print("Heartbeat received, sequence: ");
+            Serial.println(packet.sequence);
+        }
+        else if (packet.type == StageLink::PacketType::Cue &&
+                 packet.payloadLength == 1 &&
+                 packet.payload[0] == '1')
+        {
+            Serial.print("Cue 1 received, sequence: ");
+            Serial.println(packet.sequence);
+            cueFlashUntil = millis() + 100;
+        }
+        else
+        {
+            Serial.print("Packet received, type: ");
+            Serial.println(static_cast<uint8_t>(packet.type));
+        }
+    }
+
+    if (millis() < cueFlashUntil)
+    {
+        StatusLED::setConfig();
+        return;
+    }
+
+    if (!radio.isPeerOnline())
     {
         StatusLED::setOffline();
     }
-
-    // existing code stays here
+    else
+    {
+        StatusLED::setReady();
+    }
 }
