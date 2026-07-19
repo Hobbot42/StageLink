@@ -23,11 +23,17 @@ namespace StageLink
     public:
         bool begin(const uint8_t *initialPeer = nullptr);
 
+        bool send(
+            PacketType type,
+            const uint8_t *payload,
+            uint8_t payloadLength
+        );
+
         bool send(PacketType type, const char *payload = "");
 
         void update();
 
-        bool receive(Packet &packet);
+        bool receive(StagePacket &packet);
 
         bool getSendResult(SendResult &result);
 

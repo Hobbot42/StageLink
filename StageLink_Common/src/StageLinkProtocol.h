@@ -13,10 +13,11 @@ namespace StageLink
         Servo = 3,
         Dmx = 4,
         Configuration = 5,
+        ENCODER_VALUE = 6,
         Acknowledgement = 255
     };
 
-    struct __attribute__((packed)) Packet
+    struct __attribute__((packed)) StagePacket
     {
         PacketType type;
         uint16_t sequence;
@@ -24,6 +25,8 @@ namespace StageLink
         uint8_t payloadLength;
         char payload[MAX_PAYLOAD_SIZE];
     };
+
+    using Packet = StagePacket;
 
     inline const char *packetTypeName(PacketType type)
     {
@@ -39,6 +42,8 @@ namespace StageLink
                 return "DMX";
             case PacketType::Configuration:
                 return "configuration";
+            case PacketType::ENCODER_VALUE:
+                return "encoder";
             case PacketType::Acknowledgement:
                 return "acknowledgement";
             default:

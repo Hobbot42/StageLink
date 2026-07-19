@@ -157,9 +157,14 @@ bool StageLink::ReliableRadio::begin(const uint8_t *initialPeer)
     return true;
 }
 
-bool StageLink::ReliableRadio::send(PacketType type, const char *payload)
+bool StageLink::ReliableRadio::send(
+    PacketType type,
+    const uint8_t *payload,
+    uint8_t payloadLength
+)
 {
-    if (type == PacketType::Acknowledgement)
+    if (type == PacketType::Acknowledgement ||
+        payloadLength > MAX_PAYLOAD_SIZE)
     {
         return false;
     }
@@ -173,13 +178,22 @@ bool StageLink::ReliableRadio::send(PacketType type, const char *payload)
     Packet packet = {};
     packet.type = type;
     packet.sequence = nextSequence++;
-    packet.payloadLength = min(strlen(payload), MAX_PAYLOAD_SIZE);
+    packet.payloadLength = payloadLength;
     memcpy(packet.payload, payload, packet.payloadLength);
 
     sendQueue[sendHead] = packet;
     sendHead = next;
 
     return true;
+}
+
+bool StageLink::ReliableRadio::send(PacketType type, const char *payload)
+{
+    return send(
+        type,
+        reinterpret_cast<const uint8_t *>(payload),
+        strlen(payload)
+    );
 }
 
 void StageLink::ReliableRadio::update()
@@ -264,7 +278,7 @@ void StageLink::ReliableRadio::update()
     }
 }
 
-bool StageLink::ReliableRadio::receive(Packet &packet)
+bool StageLink::ReliableRadio::receive(StagePacket &packet)
 {
     if (applicationTail == applicationHead)
     {

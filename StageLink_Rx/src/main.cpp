@@ -1,11 +1,25 @@
 #include <Arduino.h>
+#include "Display.h"
 #include "ReliableRadio.h"
 #include "StatusLED.h"
 
 namespace
 {
 unsigned long cueFlashUntil = 0;
+int encoderValue = 0;
+bool displayReady = false;
 StageLink::ReliableRadio radio;
+
+int decodeEncoderPosition(const StageLink::StagePacket &packet)
+{
+    uint32_t value =
+        static_cast<uint8_t>(packet.payload[0]) |
+        (static_cast<uint32_t>(static_cast<uint8_t>(packet.payload[1])) << 8) |
+        (static_cast<uint32_t>(static_cast<uint8_t>(packet.payload[2])) << 16) |
+        (static_cast<uint32_t>(static_cast<uint8_t>(packet.payload[3])) << 24);
+
+    return static_cast<int32_t>(value);
+}
 }
 
 void setup()
@@ -14,6 +28,17 @@ void setup()
 
     StatusLED::begin();
     StatusLED::setOffline();
+
+    displayReady = Display::begin();
+    if (!displayReady)
+    {
+        Serial.println("Display failed");
+    }
+    else
+    {
+        Display::showEncoderValue(encoderValue);
+        Serial.println("Display Ready");
+    }
 
     Serial.println();
     Serial.println("StageLink RX");
@@ -48,6 +73,19 @@ void loop()
             Serial.print("Cue 1 received, sequence: ");
             Serial.println(packet.sequence);
             cueFlashUntil = millis() + 100;
+        }
+        else if (packet.type == StageLink::PacketType::ENCODER_VALUE &&
+                 packet.payloadLength == 4)
+        {
+            encoderValue = decodeEncoderPosition(packet);
+
+            Serial.print("Encoder received: ");
+            Serial.println(encoderValue);
+
+            if (displayReady)
+            {
+                Display::showEncoderValue(encoderValue);
+            }
         }
         else
         {
