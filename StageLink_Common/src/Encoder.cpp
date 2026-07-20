@@ -29,6 +29,8 @@ namespace
     int stableButtonState = HIGH;
     unsigned long buttonChangedTime = 0;
     bool buttonPressEvent = false;
+    bool buttonStateChangeEvent = false;
+    bool encoderButtonIsPressed = false;
 }
 
 void Encoder::begin(
@@ -50,6 +52,7 @@ void Encoder::begin(
         digitalRead(dataPin);
     lastButtonReading = digitalRead(buttonPin);
     stableButtonState = lastButtonReading;
+    encoderButtonIsPressed = stableButtonState == LOW;
 
     attachInterrupt(
         digitalPinToInterrupt(clockPin),
@@ -76,8 +79,10 @@ void Encoder::update()
         buttonReading != stableButtonState)
     {
         stableButtonState = buttonReading;
+        encoderButtonIsPressed = stableButtonState == LOW;
+        buttonStateChangeEvent = true;
 
-        if (stableButtonState == LOW)
+        if (encoderButtonIsPressed)
         {
             buttonPressEvent = true;
         }
@@ -110,6 +115,23 @@ bool Encoder::buttonPressed()
     bool pressed = buttonPressEvent;
     buttonPressEvent = false;
     return pressed;
+}
+
+bool Encoder::consumeButtonStateChange(bool &pressed)
+{
+    if (!buttonStateChangeEvent)
+    {
+        return false;
+    }
+
+    pressed = encoderButtonIsPressed;
+    buttonStateChangeEvent = false;
+    return true;
+}
+
+bool Encoder::isButtonPressed()
+{
+    return encoderButtonIsPressed;
 }
 
 void IRAM_ATTR Encoder::handleRotationInterrupt()

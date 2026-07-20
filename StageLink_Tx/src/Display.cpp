@@ -65,3 +65,79 @@ void Display::showConfigMode()
 
     display.display();
 }
+
+void Display::showStatus(
+    const char *linkState,
+    int encoderValue,
+    bool buttonPressed
+)
+{
+    display.clearDisplay();
+
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("StageLink TX");
+
+    display.println();
+    display.print("Link: ");
+    display.println(linkState);
+
+    display.println("Encoder:");
+    display.setTextSize(2);
+    display.println(encoderValue);
+
+    display.setTextSize(1);
+    display.print("Button: ");
+    display.println(buttonPressed ? "PRESSED" : "RELEASED");
+
+    display.display();
+}
+
+void Display::showDiagnostics(
+    const char *linkState,
+    unsigned long lastLatencyMs,
+    unsigned long averageLatencyMs,
+    unsigned long maxLatencyMs,
+    uint8_t retryCount,
+    uint32_t failedCount,
+    bool rssiAvailable,
+    int8_t rssi
+)
+{
+    display.clearDisplay();
+
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("TX Diagnostics");
+
+    display.print("Link: ");
+    display.println(linkState);
+
+    display.print("Lat ms L/A/M: ");
+    display.print(lastLatencyMs);
+    display.print("/");
+    display.print(averageLatencyMs);
+    display.print("/");
+    display.println(maxLatencyMs);
+
+    display.print("RX RSSI: ");
+    if (rssiAvailable)
+    {
+        display.print(rssi);
+        display.println(" dBm");
+    }
+    else
+    {
+        display.println("--");
+    }
+
+    display.print("Retries: ");
+    display.println(retryCount);
+
+    display.print("Failed: ");
+    display.println(failedCount);
+
+    display.display();
+}

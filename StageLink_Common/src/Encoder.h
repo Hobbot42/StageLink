@@ -19,6 +19,10 @@ public:
 
     static bool buttonPressed();
 
+    static bool consumeButtonStateChange(bool &pressed);
+
+    static bool isButtonPressed();
+
 private:
     static void IRAM_ATTR handleRotationInterrupt();
 };

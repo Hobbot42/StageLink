@@ -14,14 +14,25 @@ namespace StageLink
         Dmx = 4,
         Configuration = 5,
         ENCODER_VALUE = 6,
+        BUTTON_EVENT = 7,
+        STATE_REQUEST = 8,
+        STATE_SNAPSHOT = 9,
         Acknowledgement = 255
+    };
+
+    enum class ButtonState : uint8_t
+    {
+        Released = 0,
+        Pressed = 1
     };
 
     struct __attribute__((packed)) StagePacket
     {
         PacketType type;
         uint16_t sequence;
+        uint16_t sessionId;
         uint16_t acknowledgedSequence;
+        uint16_t acknowledgedSessionId;
         uint8_t payloadLength;
         char payload[MAX_PAYLOAD_SIZE];
     };
@@ -44,6 +55,12 @@ namespace StageLink
                 return "configuration";
             case PacketType::ENCODER_VALUE:
                 return "encoder";
+            case PacketType::BUTTON_EVENT:
+                return "button";
+            case PacketType::STATE_REQUEST:
+                return "state request";
+            case PacketType::STATE_SNAPSHOT:
+                return "state snapshot";
             case PacketType::Acknowledgement:
                 return "acknowledgement";
             default:

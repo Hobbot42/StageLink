@@ -1,7 +1,9 @@
 #include "ReliableRadio.h"
+#include "RssiMonitor.h"
 
 #include <WiFi.h>
 #include <esp_now.h>
+#include <esp_system.h>
 
 namespace
 {
@@ -22,6 +24,7 @@ namespace
         bool active = false;
         StageLink::Packet packet = {};
         uint8_t attempts = 0;
+        unsigned long firstSentTime = 0;
         unsigned long lastSentTime = 0;
     };
 
@@ -48,10 +51,23 @@ namespace
     uint8_t defaultPeer[6] = {};
     bool hasDefaultPeer = false;
     uint16_t nextSequence = 1;
+    uint16_t localSessionId = 0;
     uint16_t lastDeliveredSequence = 0;
+    uint16_t lastDeliveredSessionId = 0;
     bool hasLastDeliveredSequence = false;
     unsigned long startTime = 0;
     unsigned long lastReceivedTime = 0;
+    unsigned long lastRoundTripMs = 0;
+    unsigned long roundTripSumMs = 0;
+    unsigned long maxRoundTripMs = 0;
+    uint32_t roundTripSamples = 0;
+    uint8_t lastRetryCount = 0;
+    uint32_t packetsSent = 0;
+    uint32_t packetsAcknowledged = 0;
+    uint32_t packetsFailed = 0;
+    uint32_t packetsReceived = 0;
+    uint32_t totalRetries = 0;
+    uint32_t duplicatePackets = 0;
 
     uint8_t nextIndex(uint8_t index)
     {
@@ -103,22 +119,16 @@ namespace
         resultHead = next;
     }
 
-    void sendAcknowledgement(const uint8_t *mac, uint16_t acknowledgedSequence)
-    {
-        StageLink::Packet acknowledgement = {};
-        acknowledgement.type = StageLink::PacketType::Acknowledgement;
-        acknowledgement.sequence = nextSequence++;
-        acknowledgement.acknowledgedSequence = acknowledgedSequence;
-
-        // ACK packets are control responses. Acknowledging an ACK would create a loop.
-        sendPacket(acknowledgement, mac);
-    }
-
     void transmitPendingPacket()
     {
         if (!hasDefaultPeer)
         {
             return;
+        }
+
+        if (pendingPacket.attempts > 0)
+        {
+            totalRetries++;
         }
 
         sendPacket(pendingPacket.packet, defaultPeer);
@@ -140,10 +150,13 @@ bool StageLink::ReliableRadio::begin(const uint8_t *initialPeer)
 
     esp_now_register_recv_cb(onDataReceived);
 
+    RssiMonitor::begin();
+
     if (initialPeer != nullptr)
     {
         memcpy(defaultPeer, initialPeer, 6);
         hasDefaultPeer = true;
+        RssiMonitor::setPeer(defaultPeer);
 
         if (!ensurePeer(defaultPeer))
         {
@@ -153,6 +166,12 @@ bool StageLink::ReliableRadio::begin(const uint8_t *initialPeer)
 
     startTime = millis();
     lastReceivedTime = startTime;
+    localSessionId = static_cast<uint16_t>(esp_random());
+
+    if (localSessionId == 0)
+    {
+        localSessionId = 1;
+    }
 
     return true;
 }
@@ -178,6 +197,7 @@ bool StageLink::ReliableRadio::send(
     Packet packet = {};
     packet.type = type;
     packet.sequence = nextSequence++;
+    packet.sessionId = localSessionId;
     packet.payloadLength = payloadLength;
     memcpy(packet.payload, payload, packet.payloadLength);
 
@@ -214,26 +234,44 @@ void StageLink::ReliableRadio::update()
     {
         memcpy(defaultPeer, incoming.mac, 6);
         hasDefaultPeer = true;
+        RssiMonitor::setPeer(defaultPeer);
         lastReceivedTime = millis();
 
         if (incoming.packet.type == PacketType::Acknowledgement)
         {
             if (pendingPacket.active &&
-                incoming.packet.acknowledgedSequence == pendingPacket.packet.sequence)
+                incoming.packet.acknowledgedSequence == pendingPacket.packet.sequence &&
+                incoming.packet.acknowledgedSessionId == pendingPacket.packet.sessionId)
             {
                 addResult(
                     pendingPacket.packet.type,
                     pendingPacket.packet.sequence,
                     SendStatus::Acknowledged
                 );
+                lastRoundTripMs = millis() - pendingPacket.firstSentTime;
+                roundTripSumMs += lastRoundTripMs;
+                roundTripSamples++;
+                if (lastRoundTripMs > maxRoundTripMs)
+                {
+                    maxRoundTripMs = lastRoundTripMs;
+                }
+                lastRetryCount = pendingPacket.attempts - 1;
+                packetsAcknowledged++;
                 pendingPacket.active = false;
             }
         }
         else
         {
-            sendAcknowledgement(incoming.mac, incoming.packet.sequence);
+            StageLink::Packet acknowledgement = {};
+            acknowledgement.type = StageLink::PacketType::Acknowledgement;
+            acknowledgement.sequence = nextSequence++;
+            acknowledgement.sessionId = localSessionId;
+            acknowledgement.acknowledgedSequence = incoming.packet.sequence;
+            acknowledgement.acknowledgedSessionId = incoming.packet.sessionId;
+            sendPacket(acknowledgement, incoming.mac);
 
             bool isDuplicate = hasLastDeliveredSequence &&
+                               incoming.packet.sessionId == lastDeliveredSessionId &&
                                incoming.packet.sequence == lastDeliveredSequence;
 
             if (!isDuplicate)
@@ -244,8 +282,14 @@ void StageLink::ReliableRadio::update()
                     applicationQueue[applicationHead] = incoming.packet;
                     applicationHead = next;
                     lastDeliveredSequence = incoming.packet.sequence;
+                    lastDeliveredSessionId = incoming.packet.sessionId;
                     hasLastDeliveredSequence = true;
+                    packetsReceived++;
                 }
+            }
+            else
+            {
+                duplicatePackets++;
             }
         }
     }
@@ -256,6 +300,8 @@ void StageLink::ReliableRadio::update()
         sendTail = nextIndex(sendTail);
         pendingPacket.active = true;
         pendingPacket.attempts = 0;
+        pendingPacket.firstSentTime = millis();
+        packetsSent++;
         transmitPendingPacket();
     }
 
@@ -273,6 +319,8 @@ void StageLink::ReliableRadio::update()
                 pendingPacket.packet.sequence,
                 SendStatus::Failed
             );
+            lastRetryCount = pendingPacket.attempts - 1;
+            packetsFailed++;
             pendingPacket.active = false;
         }
     }
@@ -310,6 +358,31 @@ bool StageLink::ReliableRadio::isPeerOnline() const
     }
 
     return millis() - lastReceivedTime <= ONLINE_TIMEOUT_MS;
+}
+
+StageLink::RadioDiagnostics StageLink::ReliableRadio::diagnostics() const
+{
+    int8_t rssi = 0;
+    bool rssiAvailable = RssiMonitor::getRssi(rssi);
+
+    unsigned long averageRoundTripMs =
+        roundTripSamples > 0 ? roundTripSumMs / roundTripSamples : 0;
+
+    return {
+        isPeerOnline(),
+        rssiAvailable,
+        rssi,
+        lastRoundTripMs,
+        averageRoundTripMs,
+        maxRoundTripMs,
+        lastRetryCount,
+        packetsSent,
+        packetsAcknowledged,
+        packetsFailed,
+        packetsReceived,
+        totalRetries,
+        duplicatePackets
+    };
 }
 
 void StageLink::ReliableRadio::onDataReceived(

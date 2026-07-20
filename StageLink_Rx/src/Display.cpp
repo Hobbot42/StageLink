@@ -53,3 +53,108 @@ void Display::showEncoderValue(int value)
 
     display.display();
 }
+
+void Display::showButtonState(bool pressed)
+{
+    display.clearDisplay();
+
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("StageLink RX");
+
+    display.println();
+    display.println("Button:");
+
+    display.setTextSize(2);
+    display.println(pressed ? "PRESSED" : "RELEASED");
+
+    display.display();
+}
+
+void Display::showLinkState(const char *state)
+{
+    display.clearDisplay();
+
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("StageLink RX");
+
+    display.println();
+    display.println("Link:");
+
+    display.setTextSize(2);
+    display.println(state);
+
+    display.display();
+}
+
+void Display::showLinkAndEncoder(
+    const char *linkState,
+    int encoderValue,
+    bool buttonPressed,
+    int localEncoderValue
+)
+{
+    display.clearDisplay();
+
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("StageLink RX");
+
+    display.print("Link: ");
+    display.println(linkState);
+
+    display.println("TX Encoder:");
+    display.setTextSize(2);
+    display.println(encoderValue);
+
+    display.setTextSize(1);
+    display.print("TX Button: ");
+    display.println(buttonPressed ? "PRESSED" : "RELEASED");
+
+    display.print("RX Encoder: ");
+    display.println(localEncoderValue);
+
+    display.display();
+}
+
+void Display::showDiagnostics(
+    const char *linkState,
+    bool rssiAvailable,
+    int8_t rssi,
+    uint32_t packetCount,
+    uint32_t retryErrorCount
+)
+{
+    display.clearDisplay();
+
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("RX Diagnostics");
+
+    display.print("Link: ");
+    display.println(linkState);
+
+    display.print("TX RSSI: ");
+    if (rssiAvailable)
+    {
+        display.print(rssi);
+        display.println(" dBm");
+    }
+    else
+    {
+        display.println("--");
+    }
+
+    display.print("Packets: ");
+    display.println(packetCount);
+
+    display.print("Retry/Err: ");
+    display.println(retryErrorCount);
+
+    display.display();
+}

@@ -18,6 +18,23 @@ namespace StageLink
         SendStatus status;
     };
 
+    struct RadioDiagnostics
+    {
+        bool peerOnline;
+        bool rssiAvailable;
+        int8_t rssi;
+        unsigned long lastRoundTripMs;
+        unsigned long averageRoundTripMs;
+        unsigned long maxRoundTripMs;
+        uint8_t lastRetryCount;
+        uint32_t packetsSent;
+        uint32_t packetsAcknowledged;
+        uint32_t packetsFailed;
+        uint32_t packetsReceived;
+        uint32_t totalRetries;
+        uint32_t duplicatePackets;
+    };
+
     class ReliableRadio
     {
     public:
@@ -38,6 +55,8 @@ namespace StageLink
         bool getSendResult(SendResult &result);
 
         bool isPeerOnline() const;
+
+        RadioDiagnostics diagnostics() const;
 
     private:
         static void onDataReceived(
