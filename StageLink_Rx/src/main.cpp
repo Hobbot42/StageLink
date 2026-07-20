@@ -214,10 +214,12 @@ void loop()
             Serial.println(packet.sequence);
             cueFlashUntil = millis() + 100;
         }
-        else if (packet.type == StageLink::PacketType::ENCODER_VALUE &&
-                 packet.payloadLength == 4)
+        else if (packet.type == StageLink::PacketType::VALUE_UPDATE &&
+                 packet.payloadLength == StageLink::VALUE_UPDATE_PAYLOAD_SIZE &&
+                 StageLink::decodeValueUpdateChannel(packet.payload) ==
+                     StageLink::ValueChannel::Encoder)
         {
-            encoderValue = decodeEncoderPosition(packet);
+            encoderValue = StageLink::decodeValueUpdateValue(packet.payload);
 
             Serial.print("Encoder received: ");
             Serial.println(encoderValue);

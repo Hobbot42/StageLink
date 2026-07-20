@@ -78,13 +78,17 @@ void encodeEncoderPosition(int position, uint8_t *payload)
 
 void sendEncoderValue()
 {
-    uint8_t encoderPayload[4];
-    encodeEncoderPosition(Encoder::position(), encoderPayload);
+    uint8_t valuePayload[StageLink::VALUE_UPDATE_PAYLOAD_SIZE];
+    StageLink::encodeValueUpdate(
+        StageLink::ValueChannel::Encoder,
+        Encoder::position(),
+        valuePayload
+    );
 
     if (radio.send(
-            StageLink::PacketType::ENCODER_VALUE,
-            encoderPayload,
-            sizeof(encoderPayload)
+            StageLink::PacketType::VALUE_UPDATE,
+            valuePayload,
+            sizeof(valuePayload)
         ))
     {
         Serial.println("Queued encoder update");
