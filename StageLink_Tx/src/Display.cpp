@@ -3,11 +3,14 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
+// StageLink Display (TX)
+
 namespace
 {
     constexpr int SCREEN_WIDTH = 128;
     constexpr int SCREEN_HEIGHT = 64;
     constexpr uint8_t OLED_ADDRESS = 0x3C;
+    // I2C pins for the SSD1306 OLED.
     constexpr int SDA_PIN = 21;
     constexpr int SCL_PIN = 22;
 
@@ -69,7 +72,8 @@ void Display::showConfigMode()
 void Display::showStatus(
     const char *linkState,
     int encoderValue,
-    bool buttonPressed
+    bool buttonPressed,
+    int servoAngle
 )
 {
     display.clearDisplay();
@@ -79,15 +83,16 @@ void Display::showStatus(
     display.setCursor(0, 0);
     display.println("StageLink TX");
 
-    display.println();
     display.print("Link: ");
     display.println(linkState);
 
-    display.println("Encoder:");
-    display.setTextSize(2);
+    display.print("Encoder: ");
     display.println(encoderValue);
 
-    display.setTextSize(1);
+    display.print("Servo: ");
+    display.print(servoAngle);
+    display.println(" deg");
+
     display.print("Button: ");
     display.println(buttonPressed ? "PRESSED" : "RELEASED");
 
@@ -115,7 +120,7 @@ void Display::showDiagnostics(
     display.print("Link: ");
     display.println(linkState);
 
-    display.print("Lat ms L/A/M: ");
+    display.print("L/A/M: ");
     display.print(lastLatencyMs);
     display.print("/");
     display.print(averageLatencyMs);

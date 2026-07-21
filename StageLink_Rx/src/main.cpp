@@ -1,12 +1,37 @@
+// StageLink RX (receiver / output unit)
+// Receives TX's encoder/button state over the air and drives a physical
+// servo to match. Also has its own local encoder button, used only to
+// cycle its own display pages (not sent anywhere) - so "encoder" in this
+// file means two different things depending on context: TX's remote
+// value (encoderValue, received) vs. this board's own local encoder
+// (Encoder::position(), read directly).
+// Belongs to: StageLink_Rx.
+//
+// Packet flow (see TX main.cpp for the other side, ReliableRadio.h/
+// StageLinkProtocol.h for the transport and wire format):
+//   RX -> TX  STATE_REQUEST    sent once, right after the first packet
+//                               is ever received (see hasReceivedValidPacket)
+//   TX -> RX  STATE_SNAPSHOT   full resync reply, applied generically by
+//                               channel/type (see StateSnapshot.h)
+//   TX -> RX  VALUE_UPDATE     live encoder/servo value change
+//   TX -> RX  BUTTON_EVENT     live encoder-button press/release
+//   TX -> RX  Cue              momentary cue-button trigger (flashes LED)
+//   TX -> RX  Heartbeat        periodic liveness signal, drives LinkState
 #include <Arduino.h>
 #include "Display.h"
 #include "ReliableRadio.h"
 #include "StatusLED.h"
 #include "StatusPageCycler.h"
 #include "Encoder.h"
+#include "ServoOutput.h"
+#include "StateSnapshot.h"
+#include "ConfigManager.h"
 
 namespace
 {
+// Tracks link health for display/LED purposes; distinct from
+// ReliableRadio::isPeerOnline(), which only reflects recent traffic -
+// this also accounts for never having heard from TX at all yet.
 enum class LinkState : uint8_t
 {
     WaitingForLink,
@@ -22,30 +47,26 @@ enum class RxPage : uint8_t
 constexpr uint8_t RX_PAGE_COUNT = 2;
 constexpr unsigned long DISPLAY_REFRESH_INTERVAL_MS = 250;
 
+// RX's own local encoder (button only used for local page cycling - its
+// rotation is read for the diagnostics display but not transmitted).
 constexpr uint8_t ENCODER_CLK_PIN = 32;
 constexpr uint8_t ENCODER_DT_PIN = 33;
 constexpr uint8_t ENCODER_BUTTON_PIN = 25;
+constexpr uint8_t SERVO_PIN = 19;
 
 unsigned long cueFlashUntil = 0;
 unsigned long lastDisplayRefresh = 0;
+// TX's remote encoder position/button state, as last received over radio.
 int encoderValue = 0;
+int servoAngle = 0;
 bool encoderButtonPressed = false;
 bool displayReady = false;
+// True once any packet has ever arrived - distinguishes "never connected"
+// from "was connected, link since dropped" for LinkState/display purposes.
 bool hasReceivedValidPacket = false;
 LinkState linkState = LinkState::WaitingForLink;
 StageLink::StatusPageCycler pageCycler;
 StageLink::ReliableRadio radio;
-
-int decodeEncoderPosition(const StageLink::StagePacket &packet)
-{
-    uint32_t value =
-        static_cast<uint8_t>(packet.payload[0]) |
-        (static_cast<uint32_t>(static_cast<uint8_t>(packet.payload[1])) << 8) |
-        (static_cast<uint32_t>(static_cast<uint8_t>(packet.payload[2])) << 16) |
-        (static_cast<uint32_t>(static_cast<uint8_t>(packet.payload[3])) << 24);
-
-    return static_cast<int32_t>(value);
-}
 
 const char *linkStateText()
 {
@@ -75,7 +96,8 @@ void showCurrentPage()
             linkStateText(),
             encoderValue,
             encoderButtonPressed,
-            Encoder::position()
+            Encoder::position(),
+            servoAngle
         );
     }
     else
@@ -115,6 +137,9 @@ void setLinkState(LinkState newState, bool forceDisplayUpdate = false)
     showCurrentPage();
 }
 
+// WaitingForLink (never heard from TX) is deliberately distinct from
+// LinkLost (was connected, now quiet) even though both mean "no active
+// link" - operators need to tell "never paired" apart from "dropped."
 void updateLinkState()
 {
     if (!hasReceivedValidPacket)
@@ -136,6 +161,8 @@ void setup()
 {
     Serial.begin(115200);
 
+    StageLink::ConfigManager::begin();
+
     StatusLED::begin();
     StatusLED::setOffline();
 
@@ -144,6 +171,8 @@ void setup()
         ENCODER_DT_PIN,
         ENCODER_BUTTON_PIN
     );
+
+    ServoOutput::begin(SERVO_PIN);
 
     displayReady = Display::begin();
     if (!displayReady)
@@ -187,6 +216,9 @@ void loop()
     StageLink::Packet packet;
     while (radio.receive(packet))
     {
+        // First packet ever seen from TX: we have no state yet (encoder,
+        // button, servo are all still at their power-on defaults), so ask
+        // TX for a full snapshot rather than waiting for the next live change.
         if (!hasReceivedValidPacket)
         {
             hasReceivedValidPacket = true;
@@ -214,6 +246,8 @@ void loop()
             Serial.println(packet.sequence);
             cueFlashUntil = millis() + 100;
         }
+        // VALUE_UPDATE is the live path: applied immediately as TX's input
+        // changes. STATE_SNAPSHOT (below) only fires on reconnect.
         else if (packet.type == StageLink::PacketType::VALUE_UPDATE &&
                  packet.payloadLength == StageLink::VALUE_UPDATE_PAYLOAD_SIZE &&
                  StageLink::decodeValueUpdateChannel(packet.payload) ==
@@ -229,6 +263,19 @@ void loop()
                 showCurrentPage();
             }
         }
+        else if (packet.type == StageLink::PacketType::VALUE_UPDATE &&
+                 packet.payloadLength == StageLink::VALUE_UPDATE_PAYLOAD_SIZE &&
+                 StageLink::decodeValueUpdateChannel(packet.payload) ==
+                     StageLink::ValueChannel::Servo)
+        {
+            servoAngle = StageLink::decodeValueUpdateValue(packet.payload);
+            ServoOutput::setAngle(servoAngle);
+
+            Serial.print("Servo angle received: ");
+            Serial.println(servoAngle);
+
+            showCurrentPage();
+        }
         else if (packet.type == StageLink::PacketType::BUTTON_EVENT &&
                  packet.payloadLength == 2 &&
                  packet.payload[0] == 1 &&
@@ -243,21 +290,49 @@ void loop()
 
             showCurrentPage();
         }
-        else if (packet.type == StageLink::PacketType::STATE_SNAPSHOT &&
-                 packet.payloadLength == 5 &&
-                 (packet.payload[4] == static_cast<char>(StageLink::ButtonState::Pressed) ||
-                  packet.payload[4] == static_cast<char>(StageLink::ButtonState::Released)))
+        // Full resync: applied generically by item type, so adding a new
+        // StateItemType later (Dmx, StepperPosition, etc.) only needs a
+        // new case here, not a new packet type or payload format.
+        else if (packet.type == StageLink::PacketType::STATE_SNAPSHOT)
         {
-            encoderValue = decodeEncoderPosition(packet);
-            encoderButtonPressed =
-                packet.payload[4] == static_cast<char>(StageLink::ButtonState::Pressed);
+            StageLink::StateSnapshot snapshot;
 
-            Serial.print("State snapshot received: encoder ");
-            Serial.print(encoderValue);
-            Serial.print(", button ");
-            Serial.println(encoderButtonPressed ? "PRESSED" : "RELEASED");
+            if (StageLink::deserializeStateSnapshot(packet.payload, packet.payloadLength, snapshot))
+            {
+                for (uint8_t i = 0; i < StageLink::stateItemCount(snapshot); ++i)
+                {
+                    const StageLink::StateItem &item = snapshot.items[i];
 
-            showCurrentPage();
+                    switch (item.type)
+                    {
+                        case StageLink::StateItemType::Encoder:
+                            encoderValue = item.value;
+                            break;
+                        case StageLink::StateItemType::Button:
+                            encoderButtonPressed = item.value != 0;
+                            break;
+                        case StageLink::StateItemType::Servo:
+                            servoAngle = item.value;
+                            ServoOutput::setAngle(servoAngle);
+                            break;
+                        default:
+                            break; // unknown/future item types are safely ignored
+                    }
+                }
+
+                Serial.print("State snapshot received: encoder ");
+                Serial.print(encoderValue);
+                Serial.print(", button ");
+                Serial.print(encoderButtonPressed ? "PRESSED" : "RELEASED");
+                Serial.print(", servo ");
+                Serial.println(servoAngle);
+
+                showCurrentPage();
+            }
+            else
+            {
+                Serial.println("Malformed state snapshot received");
+            }
         }
         else
         {
@@ -274,6 +349,8 @@ void loop()
         lastDisplayRefresh = millis();
     }
 
+    // Briefly override the status LED to acknowledge a received cue,
+    // overriding the normal ready/offline color for cueFlashUntil's duration.
     if (millis() < cueFlashUntil)
     {
         StatusLED::setConfig();

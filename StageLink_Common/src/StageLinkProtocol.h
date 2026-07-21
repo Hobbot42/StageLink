@@ -1,23 +1,38 @@
+// StageLink Protocol
+// Shared wire format for all TX <-> RX communication.
+// Defines the packet types, the fixed StagePacket layout sent over
+// ESP-NOW, and the VALUE_UPDATE encode/decode helpers.
+// This is the one format both boards must agree on byte-for-byte -
+// ReliableRadio rejects any received packet whose size doesn't match
+// StagePacket exactly, so TX and RX must always be built and flashed
+// from the same version of this file.
+// Belongs to: StageLink_Common (shared by TX and RX).
+
 #pragma once
 
 #include <Arduino.h>
 
 namespace StageLink
 {
-    constexpr size_t MAX_PAYLOAD_SIZE = 48;
+    // Upper bound on payload bytes for any packet type. Sized with headroom
+    // for the largest current payload (a full STATE_SNAPSHOT, see
+    // StateSnapshot.h) while staying well under ESP-NOW's 250-byte limit.
+    constexpr size_t MAX_PAYLOAD_SIZE = 100;
 
+    // Distinguishes what a packet is for. ReliableRadio treats all of these
+    // generically for ack/retry purposes - only the application layer
+    // (TX/RX main.cpp) interprets payloads differently per type.
     enum class PacketType : uint8_t
     {
-        Heartbeat = 1,
-        Cue = 2,
-        Servo = 3,
-        Dmx = 4,
-        Configuration = 5,
-        BUTTON_EVENT = 7,
-        STATE_REQUEST = 8,
-        STATE_SNAPSHOT = 9,
-        VALUE_UPDATE = 10,
-        Acknowledgement = 255
+        Heartbeat = 1,       // periodic liveness signal, drives link state
+        Cue = 2,              // one-shot show cue trigger
+        Dmx = 4,              // reserved for future DMX output
+        Configuration = 5,    // reserved for future config packets
+        BUTTON_EVENT = 7,     // live encoder-button press/release
+        STATE_REQUEST = 8,    // ask peer to resend its full current state
+        STATE_SNAPSHOT = 9,   // full state resync, see StateSnapshot.h
+        VALUE_UPDATE = 10,    // live single-channel value change (encoder/servo)
+        Acknowledgement = 255 // ack for a received packet's sequence/session
     };
 
     enum class ButtonState : uint8_t
@@ -32,11 +47,15 @@ namespace StageLink
     // packet types.
     enum class ValueChannel : uint8_t
     {
-        Encoder = 0
+        Encoder = 0,
+        Servo = 1
     };
 
     constexpr uint8_t VALUE_UPDATE_PAYLOAD_SIZE = 5;
 
+    // VALUE_UPDATE payload is packed manually (not memcpy'd as a struct) so
+    // the byte layout is fixed and portable regardless of compiler struct
+    // padding/alignment on either board.
     inline void encodeValueUpdate(
         ValueChannel channel,
         int32_t value,
@@ -68,6 +87,17 @@ namespace StageLink
         return static_cast<int32_t>(raw);
     }
 
+    // Fixed-size envelope sent as-is over ESP-NOW (memcpy'd whole, see
+    // ReliableRadio::sendPacket). packed to guarantee no compiler-inserted
+    // padding, since both boards must agree on the exact byte layout.
+    //   sequence/sessionId: identify this packet for ack matching and
+    //     duplicate detection (a session restarts sequence numbers, e.g.
+    //     after a reboot, so both are needed to tell packets apart).
+    //   acknowledgedSequence/acknowledgedSessionId: only meaningful on
+    //     Acknowledgement packets - echo back what is being acked.
+    //   payloadLength/payload: the actual application data; payload is
+    //     always MAX_PAYLOAD_SIZE bytes on the wire, only payloadLength of
+    //     it is meaningful.
     struct __attribute__((packed)) StagePacket
     {
         PacketType type;
@@ -89,8 +119,6 @@ namespace StageLink
                 return "heartbeat";
             case PacketType::Cue:
                 return "cue";
-            case PacketType::Servo:
-                return "servo";
             case PacketType::Dmx:
                 return "DMX";
             case PacketType::Configuration:

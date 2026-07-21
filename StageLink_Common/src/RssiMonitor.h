@@ -1,3 +1,10 @@
+// StageLink RssiMonitor
+// Signal-strength side-channel for diagnostics only.
+// ESP-NOW's receive callback doesn't expose RSSI on this SDK, so this
+// sniffs the peer's raw 802.11 action frames in promiscuous mode purely
+// to read the radio's RSSI field back out.
+// Belongs to: StageLink_Common (shared by TX and RX).
+
 #pragma once
 
 #include <Arduino.h>

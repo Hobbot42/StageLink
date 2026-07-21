@@ -2,6 +2,8 @@
 
 #include <Adafruit_NeoPixel.h>
 
+// StageLink StatusLED
+
 namespace
 {
     constexpr uint8_t LED_PIN = 2;

@@ -1,3 +1,10 @@
+// StageLink Display (TX)
+// Drives the TX unit's OLED. Shows TX's own encoder/button/servo state
+// on the status page, and ReliableRadio's diagnostics on the other.
+// Belongs to: StageLink_Tx (StageLink_Rx has its own Display with a
+// different set of pages - not shared, since TX and RX show different
+// information).
+
 #pragma once
 
 #include <cstdint>
@@ -14,7 +21,8 @@ public:
     static void showStatus(
         const char *linkState,
         int encoderValue,
-        bool buttonPressed
+        bool buttonPressed,
+        int servoAngle
     );
 
     static void showDiagnostics(

@@ -1,11 +1,20 @@
 #include "Encoder.h"
 
+// StageLink Encoder
+
 namespace
 {
     constexpr unsigned long BUTTON_DEBOUNCE_MS = 30;
+    // This encoder's detent spacing produces 2 valid quadrature transitions
+    // per physical click, so movement only commits once that many
+    // transitions have accumulated in one direction - filters out the
+    // "half step" a mechanical detent can otherwise register as noise.
     constexpr int QUADRATURE_TRANSITIONS_PER_STEP = 2;
 
-    // Each entry describes one valid transition between two quadrature states.
+    // Lookup table of movement (-1/0/+1) indexed by
+    // (previousState << 2 | currentState), where state is the 2-bit
+    // (CLK<<1 | DT) reading. 0 entries are either "no change" or an
+    // impossible/bounced transition, both treated as no movement.
     constexpr int8_t quadratureTransitions[] =
     {
          0, -1,  1,  0,
@@ -54,6 +63,9 @@ void Encoder::begin(
     stableButtonState = lastButtonReading;
     encoderButtonIsPressed = stableButtonState == LOW;
 
+    // Both CLK and DT get interrupts (not just CLK) so no quadrature edge
+    // is ever missed between polls - rotation direction depends on seeing
+    // every transition in order.
     attachInterrupt(
         digitalPinToInterrupt(clockPin),
         Encoder::handleRotationInterrupt,
@@ -69,6 +81,9 @@ void Encoder::begin(
 
 void Encoder::update()
 {
+    // Standard debounce: only commit a reading once it has held steady for
+    // BUTTON_DEBOUNCE_MS, so mechanical contact bounce doesn't register as
+    // multiple presses.
     int buttonReading = digitalRead(buttonPin);
     if (buttonReading != lastButtonReading)
     {
@@ -140,6 +155,9 @@ void IRAM_ATTR Encoder::handleRotationInterrupt()
         (digitalRead(clockPin) << 1) |
         digitalRead(dataPin);
 
+    // Look up how this state pair moves the encoder (see the transition
+    // table above), then accumulate until a full detent's worth of
+    // transitions has been seen before committing a step.
     uint8_t transition = (lastQuadratureState << 2) | currentState;
     int8_t movement = quadratureTransitions[transition];
 

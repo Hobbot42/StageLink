@@ -5,6 +5,8 @@
 
 namespace
 {
+    // Minimal 802.11 MAC header, just enough to read frame type/subtype
+    // and the sender address (addr2) out of a promiscuous-mode capture.
     struct WifiIeee80211MacHeader
     {
         uint16_t frameControl;
@@ -23,6 +25,10 @@ namespace
     volatile int8_t lastRssi = 0;
     volatile bool hasRssi = false;
 
+    // Runs for every management frame overheard on this WiFi channel.
+    // ESP-NOW frames are 802.11 action frames, so filtering down to
+    // management/action + the known peer's address isolates just our
+    // radio traffic without needing to parse ESP-NOW's own payload.
     void IRAM_ATTR handlePromiscuousRx(void *buffer, wifi_promiscuous_pkt_type_t type)
     {
         if (type != WIFI_PKT_MGMT || !hasPeer)
@@ -86,6 +92,9 @@ void StageLink::RssiMonitor::setPeer(const uint8_t *mac)
 
     memcpy(peerMac, mac, 6);
     hasPeer = true;
+    // Old RSSI belonged to a different peer (or the same peer's stale
+    // reading) - clear it so getRssi() doesn't report a value that
+    // doesn't correspond to the current link.
     hasRssi = false;
 }
 

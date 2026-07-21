@@ -1,3 +1,7 @@
+// StageLink StatusPageCycler
+// Tracks which display page (status vs. diagnostics) a board is showing.
+// Belongs to: StageLink_Common (shared by TX and RX).
+
 #pragma once
 
 #include <Arduino.h>

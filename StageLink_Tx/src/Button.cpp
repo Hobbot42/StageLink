@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 
+// StageLink Button
+
 namespace
 {
     constexpr uint8_t BUTTON_PIN = 0;
