@@ -1,17 +1,29 @@
 // StageLink ServoOutput
 // Thin wrapper around ESP32Servo driving RX's physical servo output.
-// Angle arrives from TX via VALUE_UPDATE (live) and STATE_SNAPSHOT
-// (resync on reconnect) - see RX main.cpp.
+// Registered with OutputManager (see RX main.cpp) rather than called
+// directly - angle arrives from TX via VALUE_UPDATE (live) and
+// STATE_SNAPSHOT (resync on reconnect), both routed through OutputManager.
 // Belongs to: StageLink_Rx.
 
 #pragma once
 
-#include <cstdint>
+#include <ESP32Servo.h>
+#include "OutputDevice.h"
 
-class ServoOutput
+class ServoOutput : public StageLink::OutputDevice
 {
 public:
-    static void begin(uint8_t pin);
+    explicit ServoOutput(uint8_t pin);
 
-    static void setAngle(int angle);
+    bool begin() override;
+
+    void update(int32_t value) override;
+
+    void diagnostics() override;
+
+private:
+    uint8_t pin;
+    int servoMinAngle;
+    int servoMaxAngle;
+    Servo servo;
 };

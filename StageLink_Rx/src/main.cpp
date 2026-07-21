@@ -26,6 +26,7 @@
 #include "ServoOutput.h"
 #include "StateSnapshot.h"
 #include "ConfigManager.h"
+#include "OutputManager.h"
 
 namespace
 {
@@ -54,6 +55,12 @@ constexpr uint8_t ENCODER_DT_PIN = 33;
 constexpr uint8_t ENCODER_BUTTON_PIN = 25;
 constexpr uint8_t SERVO_PIN = 19;
 
+// OutputManager channel numbering is local to this board - it identifies
+// "which output device" and is decoupled from the wire-level ValueChannel/
+// StateSnapshot channel IDs, both of which are decoded first and then
+// routed through here.
+constexpr uint8_t OUTPUT_CHANNEL_SERVO = 1;
+
 unsigned long cueFlashUntil = 0;
 unsigned long lastDisplayRefresh = 0;
 // TX's remote encoder position/button state, as last received over radio.
@@ -67,6 +74,8 @@ bool hasReceivedValidPacket = false;
 LinkState linkState = LinkState::WaitingForLink;
 StageLink::StatusPageCycler pageCycler;
 StageLink::ReliableRadio radio;
+StageLink::OutputManager outputManager;
+ServoOutput servoOutputDevice(SERVO_PIN);
 
 const char *linkStateText()
 {
@@ -172,7 +181,10 @@ void setup()
         ENCODER_BUTTON_PIN
     );
 
-    ServoOutput::begin(SERVO_PIN);
+    if (!outputManager.registerDevice(OUTPUT_CHANNEL_SERVO, &servoOutputDevice))
+    {
+        Serial.println("Servo output failed to initialize");
+    }
 
     displayReady = Display::begin();
     if (!displayReady)
@@ -269,7 +281,7 @@ void loop()
                      StageLink::ValueChannel::Servo)
         {
             servoAngle = StageLink::decodeValueUpdateValue(packet.payload);
-            ServoOutput::setAngle(servoAngle);
+            outputManager.update(OUTPUT_CHANNEL_SERVO, servoAngle);
 
             Serial.print("Servo angle received: ");
             Serial.println(servoAngle);
@@ -313,7 +325,7 @@ void loop()
                             break;
                         case StageLink::StateItemType::Servo:
                             servoAngle = item.value;
-                            ServoOutput::setAngle(servoAngle);
+                            outputManager.update(OUTPUT_CHANNEL_SERVO, servoAngle);
                             break;
                         default:
                             break; // unknown/future item types are safely ignored
