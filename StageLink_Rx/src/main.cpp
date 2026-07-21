@@ -27,6 +27,7 @@
 #include "StateSnapshot.h"
 #include "ConfigManager.h"
 #include "OutputManager.h"
+#include "LEDOutput.h"
 
 namespace
 {
@@ -60,6 +61,7 @@ constexpr uint8_t SERVO_PIN = 19;
 // StateSnapshot channel IDs, both of which are decoded first and then
 // routed through here.
 constexpr uint8_t OUTPUT_CHANNEL_SERVO = 1;
+constexpr uint8_t OUTPUT_CHANNEL_LED = 2;
 
 unsigned long cueFlashUntil = 0;
 unsigned long lastDisplayRefresh = 0;
@@ -76,6 +78,7 @@ StageLink::StatusPageCycler pageCycler;
 StageLink::ReliableRadio radio;
 StageLink::OutputManager outputManager;
 ServoOutput servoOutputDevice(SERVO_PIN);
+LEDOutput ledOutputDevice;
 
 const char *linkStateText()
 {
@@ -184,6 +187,11 @@ void setup()
     if (!outputManager.registerDevice(OUTPUT_CHANNEL_SERVO, &servoOutputDevice))
     {
         Serial.println("Servo output failed to initialize");
+    }
+
+    if (!outputManager.registerDevice(OUTPUT_CHANNEL_LED, &ledOutputDevice))
+    {
+        Serial.println("LED output failed to initialize");
     }
 
     displayReady = Display::begin();
