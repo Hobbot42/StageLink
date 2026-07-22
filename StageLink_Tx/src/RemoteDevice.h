@@ -24,9 +24,10 @@
 class RemoteDevice
 {
 public:
-    // Full manual reset - not currently called automatically anywhere
-    // (see setConnected()); available for future use, e.g. handling a
-    // reconnect that turns out to be a different physical device.
+    // Full manual reset. Called automatically by setConnected() on a
+    // connected -> disconnected edge (see below); also available
+    // standalone for future use, e.g. handling a reconnect that turns
+    // out to be a different physical device.
     void clear()
     {
         connected = false;
@@ -42,12 +43,22 @@ public:
         clear();
     }
 
-    // Deliberately has no side effects on hasDeviceInfo/hasOutputList -
-    // those latch true once received and are never auto-cleared today,
-    // matching the pre-refactor behavior this replaces. Call clear()
-    // explicitly if a future caller wants disconnect to invalidate them.
+    // Call every loop() with the current link state (see TX main.cpp).
+    // Only the connected -> disconnected edge does anything beyond
+    // storing the flag: everything learned about RX is invalidated,
+    // since a reconnect might even be a different physical device and
+    // stale DeviceInfo/OutputList must not be mistaken for current.
+    // Reconnecting doesn't need special handling here - the discovery
+    // flow (CAPABILITY_REQUEST/RESPONSE, OUTPUT_LIST_REQUEST/RESPONSE)
+    // is unchanged and repopulates everything once TX's heartbeat proves
+    // the link is back up, exactly as it does after first boot.
     void setConnected(bool isConnected)
     {
+        if (connected && !isConnected)
+        {
+            clear();
+        }
+
         connected = isConnected;
     }
 
