@@ -1,4 +1,10 @@
-// StageLink RX (receiver / output unit)
+// FxQ
+// Product: RxQ
+// Version: v0.9.0
+//
+// Project information is maintained in FxQInfo.h
+//
+// RxQ (receiver / output unit)
 // Receives TX's encoder/button state over the air and drives a physical
 // servo to match. Also has its own local encoder button, used only to
 // cycle its own display pages (not sent anywhere) - so "encoder" in this
@@ -17,6 +23,8 @@
 //   TX -> RX  BUTTON_EVENT     live encoder-button press/release
 //   TX -> RX  Cue              momentary cue-button trigger (flashes LED)
 //   TX -> RX  Heartbeat        periodic liveness signal, drives LinkState
+//   TX -> RX  CAPABILITY_REQUEST   "report your device info/capabilities"
+//   RX -> TX  CAPABILITY_RESPONSE  reply, see DeviceInfo.h
 #include <Arduino.h>
 #include "Display.h"
 #include "ReliableRadio.h"
@@ -28,6 +36,9 @@
 #include "ConfigManager.h"
 #include "OutputManager.h"
 #include "LEDOutput.h"
+#include "DeviceInfo.h"
+#include "RxQInfo.h"
+#include "FxQBuildInfo.h"
 
 namespace
 {
@@ -85,6 +96,79 @@ LEDOutput ledOutputDevice;
 LEDChannelProxy ledRedProxy(ledOutputDevice, LEDChannelProxy::Channel::Red);
 LEDChannelProxy ledGreenProxy(ledOutputDevice, LEDChannelProxy::Channel::Green);
 LEDChannelProxy ledBlueProxy(ledOutputDevice, LEDChannelProxy::Channel::Blue);
+
+// Built once in setup() (see initDeviceInfo()) and sent as-is whenever
+// TX asks - see CAPABILITY_REQUEST handling in loop().
+StageLink::DeviceInfo localDeviceInfo;
+
+void initDeviceInfo()
+{
+    StageLink::setDeviceInfoField(
+        localDeviceInfo.name,
+        StageLink::DEVICE_NAME_MAX_LENGTH,
+        "RxQ Universal"
+    );
+    StageLink::setDeviceInfoField(
+        localDeviceInfo.firmwareVersion,
+        StageLink::DEVICE_VERSION_MAX_LENGTH,
+        FxQ::PRODUCT_VERSION
+    );
+    StageLink::setDeviceInfoField(
+        localDeviceInfo.hardwareVersion,
+        StageLink::DEVICE_HW_VERSION_MAX_LENGTH,
+        FxQ::HARDWARE_REVISION
+    );
+
+    // Reflects what's actually registered with OutputManager above -
+    // Motion (servo) and LED (addressable strip). Relay/Input aren't
+    // implemented on this board, so they're left unset rather than
+    // claimed.
+    localDeviceInfo.capabilities =
+        StageLink::capabilityBit(StageLink::DeviceCapability::Motion) |
+        StageLink::capabilityBit(StageLink::DeviceCapability::LedAddressable);
+}
+
+void sendCapabilityResponse()
+{
+    uint8_t payload[StageLink::DEVICE_INFO_WIRE_SIZE];
+    uint8_t length = StageLink::serializeDeviceInfo(localDeviceInfo, payload);
+
+    if (radio.send(StageLink::PacketType::CAPABILITY_RESPONSE, payload, length))
+    {
+        Serial.println("Sent capability response");
+    }
+    else
+    {
+        Serial.println("Capability response queue full");
+    }
+}
+
+void printStartupBanner()
+{
+    Serial.println();
+    Serial.println("========================");
+    Serial.println(FxQ::PROJECT_BRAND);
+    Serial.println();
+    Serial.print("Product: ");
+    Serial.println(FxQ::PRODUCT_NAME);
+    Serial.print("Version: ");
+    Serial.println(FxQ::PRODUCT_VERSION);
+    Serial.print("Build: B");
+    Serial.println(FXQ_BUILD_NUMBER);
+    Serial.print("HW: ");
+    Serial.println(FxQ::HARDWARE_REVISION);
+    Serial.print("FxQ Link: ");
+    Serial.println(FxQ::LINK_VERSION);
+    Serial.print("Built: ");
+    Serial.print(FXQ_BUILD_DATE);
+    Serial.print(" ");
+    Serial.println(FXQ_BUILD_TIME);
+    Serial.print("Git: ");
+    Serial.println(FXQ_GIT_COMMIT);
+    Serial.println();
+    Serial.println("Starting...");
+    Serial.println("========================");
+}
 
 const char *linkStateText()
 {
@@ -204,6 +288,8 @@ void setup()
     outputManager.registerDevice(OUTPUT_CHANNEL_LED_GREEN, &ledGreenProxy);
     outputManager.registerDevice(OUTPUT_CHANNEL_LED_BLUE, &ledBlueProxy);
 
+    initDeviceInfo();
+
     displayReady = Display::begin();
     if (!displayReady)
     {
@@ -218,9 +304,7 @@ void setup()
 
     setLinkState(LinkState::WaitingForLink, true);
 
-    Serial.println();
-    Serial.println("StageLink RX");
-    Serial.println("Starting reliable radio...");
+    printStartupBanner();
 
     if (!radio.begin())
     {
@@ -236,6 +320,7 @@ void loop()
 {
     radio.update();
     Encoder::update();
+    ledOutputDevice.tick();
 
     if (Encoder::buttonPressed())
     {
@@ -276,6 +361,11 @@ void loop()
             Serial.println(packet.sequence);
             cueFlashUntil = millis() + 100;
         }
+        else if (packet.type == StageLink::PacketType::CAPABILITY_REQUEST)
+        {
+            Serial.println("Capability request received");
+            sendCapabilityResponse();
+        }
         // VALUE_UPDATE is the live path: applied immediately as TX's input
         // changes. STATE_SNAPSHOT (below) only fires on reconnect.
         else if (packet.type == StageLink::PacketType::VALUE_UPDATE &&
@@ -305,6 +395,50 @@ void loop()
             Serial.println(servoAngle);
 
             showCurrentPage();
+        }
+        else if (packet.type == StageLink::PacketType::VALUE_UPDATE &&
+                 packet.payloadLength == StageLink::VALUE_UPDATE_PAYLOAD_SIZE &&
+                 StageLink::decodeValueUpdateChannel(packet.payload) ==
+                     StageLink::ValueChannel::LedRed)
+        {
+            int value = StageLink::decodeValueUpdateValue(packet.payload);
+            outputManager.update(OUTPUT_CHANNEL_LED_RED, value);
+
+            Serial.print("LED red received: ");
+            Serial.println(value);
+        }
+        else if (packet.type == StageLink::PacketType::VALUE_UPDATE &&
+                 packet.payloadLength == StageLink::VALUE_UPDATE_PAYLOAD_SIZE &&
+                 StageLink::decodeValueUpdateChannel(packet.payload) ==
+                     StageLink::ValueChannel::LedGreen)
+        {
+            int value = StageLink::decodeValueUpdateValue(packet.payload);
+            outputManager.update(OUTPUT_CHANNEL_LED_GREEN, value);
+
+            Serial.print("LED green received: ");
+            Serial.println(value);
+        }
+        else if (packet.type == StageLink::PacketType::VALUE_UPDATE &&
+                 packet.payloadLength == StageLink::VALUE_UPDATE_PAYLOAD_SIZE &&
+                 StageLink::decodeValueUpdateChannel(packet.payload) ==
+                     StageLink::ValueChannel::LedBlue)
+        {
+            int value = StageLink::decodeValueUpdateValue(packet.payload);
+            outputManager.update(OUTPUT_CHANNEL_LED_BLUE, value);
+
+            Serial.print("LED blue received: ");
+            Serial.println(value);
+        }
+        else if (packet.type == StageLink::PacketType::VALUE_UPDATE &&
+                 packet.payloadLength == StageLink::VALUE_UPDATE_PAYLOAD_SIZE &&
+                 StageLink::decodeValueUpdateChannel(packet.payload) ==
+                     StageLink::ValueChannel::LedBrightness)
+        {
+            int value = StageLink::decodeValueUpdateValue(packet.payload);
+            outputManager.update(OUTPUT_CHANNEL_LED_BRIGHTNESS, value);
+
+            Serial.print("LED brightness received: ");
+            Serial.println(value);
         }
         else if (packet.type == StageLink::PacketType::BUTTON_EVENT &&
                  packet.payloadLength == 2 &&
@@ -344,6 +478,18 @@ void loop()
                         case StageLink::StateItemType::Servo:
                             servoAngle = item.value;
                             outputManager.update(OUTPUT_CHANNEL_SERVO, servoAngle);
+                            break;
+                        case StageLink::StateItemType::LedRed:
+                            outputManager.update(OUTPUT_CHANNEL_LED_RED, item.value);
+                            break;
+                        case StageLink::StateItemType::LedGreen:
+                            outputManager.update(OUTPUT_CHANNEL_LED_GREEN, item.value);
+                            break;
+                        case StageLink::StateItemType::LedBlue:
+                            outputManager.update(OUTPUT_CHANNEL_LED_BLUE, item.value);
+                            break;
+                        case StageLink::StateItemType::LedBrightness:
+                            outputManager.update(OUTPUT_CHANNEL_LED_BRIGHTNESS, item.value);
                             break;
                         default:
                             break; // unknown/future item types are safely ignored

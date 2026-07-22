@@ -3,8 +3,14 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include "RxQInfo.h"
+#include "FxQBuildInfo.h"
 
-// StageLink Display (RX)
+// FxQ
+// Product: RxQ
+// Version: v0.9.0
+//
+// Project information is maintained in FxQInfo.h
 
 namespace
 {
@@ -21,6 +27,19 @@ namespace
         &Wire,
         -1
     );
+
+    // Appended to every screen so the firmware actually running on the
+    // board is always visible - see FxQInfo.h/FxQBuildInfo.h for the
+    // underlying values. Text wraps automatically (Adafruit_GFX default)
+    // if it doesn't fit the current line.
+    void printIdentityLine()
+    {
+        display.print(FxQ::PRODUCT_NAME);
+        display.print(" ");
+        display.print(FxQ::PRODUCT_VERSION);
+        display.print(" B");
+        display.println(FXQ_BUILD_NUMBER);
+    }
 }
 
 bool Display::begin()
@@ -45,7 +64,7 @@ void Display::showEncoderValue(int value)
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 0);
-    display.println("StageLink RX");
+    display.println(FxQ::PRODUCT_NAME);
 
     display.setTextSize(1);
     display.println();
@@ -64,7 +83,7 @@ void Display::showButtonState(bool pressed)
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 0);
-    display.println("StageLink RX");
+    display.println(FxQ::PRODUCT_NAME);
 
     display.println();
     display.println("Button:");
@@ -82,7 +101,7 @@ void Display::showLinkState(const char *state)
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 0);
-    display.println("StageLink RX");
+    display.println(FxQ::PRODUCT_NAME);
 
     display.println();
     display.println("Link:");
@@ -106,7 +125,7 @@ void Display::showLinkAndEncoder(
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 0);
-    display.println("StageLink RX");
+    printIdentityLine();
 
     display.print("Link: ");
     display.println(linkState);
@@ -140,7 +159,8 @@ void Display::showDiagnostics(
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 0);
-    display.println("RX Diagnostics");
+    printIdentityLine();
+    display.println("Diagnostics");
 
     display.print("Link: ");
     display.println(linkState);

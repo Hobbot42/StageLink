@@ -29,6 +29,28 @@ namespace
     constexpr int32_t DEFAULT_LED_COUNT = 8;
     constexpr uint8_t DEFAULT_LED_BRIGHTNESS = 128;
 
+    // How often (and how far) tick() steps a channel toward its target.
+    // Duration scales with distance: a full 0-255 sweep takes ~1.3s
+    // (128 steps * 10ms), a single 5-unit click-step takes ~30ms.
+    constexpr unsigned long FADE_STEP_INTERVAL_MS = 10;
+    constexpr uint8_t FADE_STEP_SIZE = 2;
+
+    // Moves current one step toward target (clamped so it never
+    // overshoots). Returns whether it actually changed.
+    bool stepToward(uint8_t &current, uint8_t target, uint8_t step)
+    {
+        if (current == target)
+        {
+            return false;
+        }
+
+        int delta = static_cast<int>(target) - static_cast<int>(current);
+        int clampedStep = constrain(delta, -static_cast<int>(step), static_cast<int>(step));
+        current = static_cast<uint8_t>(static_cast<int>(current) + clampedStep);
+
+        return true;
+    }
+
     // One-wire (WS2812/NeoPixel-class). clockPin is unused.
     class WS2812Driver : public LEDStripDriver
     {
@@ -66,10 +88,13 @@ namespace
     class APA102Driver : public LEDStripDriver
     {
     public:
-        // Adafruit_DotStar has no no-arg constructor - these are
-        // throwaway values, replaced by begin()'s updatePins()/
-        // updateLength() before anything is driven.
-        APA102Driver() : strip(1, 0, 1) {}
+        // Adafruit_DotStar has no no-arg constructor - the pin/count
+        // values here are throwaway, replaced by begin()'s updatePins()/
+        // updateLength() before anything is driven. Color order (BGR)
+        // isn't reconfigurable after construction, so it's set here for
+        // real - confirmed against actual hardware (default BRG had red
+        // and green swapped).
+        APA102Driver() : strip(1, 0, 1, DOTSTAR_BGR) {}
 
         bool begin(uint8_t dataPin, uint8_t clockPin, uint16_t count) override
         {
@@ -145,11 +170,14 @@ bool LEDOutput::reloadConfiguration()
 
     // Reload starts from white at the configured brightness, same
     // starting look as before RGB support existed - live channel updates
-    // (setRed/setGreen/setBlue/setBrightness) take it from there.
-    red = 255;
-    green = 255;
-    blue = 255;
-    brightness = StageLink::ConfigManager::getUInt8("ledBrightness", DEFAULT_LED_BRIGHTNESS);
+    // (setRed/setGreen/setBlue/setBrightness) take it from there. Current
+    // and target are set together here so reload itself doesn't fade in
+    // from black - only later live changes do.
+    red = targetRed = 255;
+    green = targetGreen = 255;
+    blue = targetBlue = 255;
+    brightness = targetBrightness =
+        StageLink::ConfigManager::getUInt8("ledBrightness", DEFAULT_LED_BRIGHTNESS);
     refresh();
 
     return success;
@@ -169,31 +197,48 @@ void LEDOutput::refresh()
 
 void LEDOutput::setRed(int32_t value)
 {
-    red = static_cast<uint8_t>(constrain(value, 0, 255));
-    refresh();
+    targetRed = static_cast<uint8_t>(constrain(value, 0, 255));
 }
 
 void LEDOutput::setGreen(int32_t value)
 {
-    green = static_cast<uint8_t>(constrain(value, 0, 255));
-    refresh();
+    targetGreen = static_cast<uint8_t>(constrain(value, 0, 255));
 }
 
 void LEDOutput::setBlue(int32_t value)
 {
-    blue = static_cast<uint8_t>(constrain(value, 0, 255));
-    refresh();
+    targetBlue = static_cast<uint8_t>(constrain(value, 0, 255));
 }
 
 void LEDOutput::setBrightness(int32_t value)
 {
-    brightness = static_cast<uint8_t>(constrain(value, 0, 255));
-    refresh();
+    targetBrightness = static_cast<uint8_t>(constrain(value, 0, 255));
 }
 
 void LEDOutput::update(int32_t value)
 {
     setBrightness(value);
+}
+
+void LEDOutput::tick()
+{
+    if (millis() - lastFadeStepTime < FADE_STEP_INTERVAL_MS)
+    {
+        return;
+    }
+
+    lastFadeStepTime = millis();
+
+    bool changed = false;
+    changed |= stepToward(red, targetRed, FADE_STEP_SIZE);
+    changed |= stepToward(green, targetGreen, FADE_STEP_SIZE);
+    changed |= stepToward(blue, targetBlue, FADE_STEP_SIZE);
+    changed |= stepToward(brightness, targetBrightness, FADE_STEP_SIZE);
+
+    if (changed)
+    {
+        refresh();
+    }
 }
 
 void LEDOutput::diagnostics()

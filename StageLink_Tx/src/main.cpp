@@ -1,4 +1,10 @@
-// StageLink TX (handheld control unit)
+// FxQ
+// Product: TxQ
+// Version: v0.9.0
+//
+// Project information is maintained in FxQInfo.h
+//
+// TxQ (handheld control unit)
 // Reads the operator's rotary encoder and buttons, and is the source of
 // truth for encoder position, button state, and the derived servo angle.
 // Sends that state to RX both live (VALUE_UPDATE/BUTTON_EVENT as it
@@ -14,6 +20,8 @@
 //   TX -> RX  Cue              momentary cue-button trigger
 //   RX -> TX  STATE_REQUEST    "send me your full current state"
 //   TX -> RX  STATE_SNAPSHOT   full resync reply (see StateSnapshot.h)
+//   TX -> RX  CAPABILITY_REQUEST   "report your device info/capabilities"
+//   RX -> TX  CAPABILITY_RESPONSE  reply, see DeviceInfo.h
 #include <Arduino.h>
 #include "Display.h"
 #include "ReliableRadio.h"
@@ -24,6 +32,9 @@
 #include "StateSnapshot.h"
 #include "OutputLimiter.h"
 #include "ConfigManager.h"
+#include "DeviceInfo.h"
+#include "TxQInfo.h"
+#include "FxQBuildInfo.h"
 
 namespace
 {
@@ -39,23 +50,34 @@ constexpr uint8_t ENCODER_BUTTON_PIN = 25;
 enum class TxPage : uint8_t
 {
     Status = 0,
-    Diagnostics = 1
+    Diagnostics = 1,
+    DeviceInfo = 2
 };
-constexpr uint8_t TX_PAGE_COUNT = 2;
+constexpr uint8_t TX_PAGE_COUNT = 3;
 constexpr unsigned long DISPLAY_REFRESH_INTERVAL_MS = 250;
 
-// TX has no physical servo - these describe how RX's servo angle is
-// derived from the encoder, since TX is the source of truth for it.
-// The angle is accumulated from relative encoder steps (via
-// OutputLimiter, see servoOutput below) rather than recomputed from
-// Encoder::position() directly, so it clamps without windup: once a
-// limit is hit, further movement in that direction is dropped instead of
-// silently building up, and reversing direction responds immediately
-// instead of first having to travel back through the clamped range.
-constexpr int SERVO_MIN_ANGLE = 0;
-constexpr int SERVO_MAX_ANGLE = 180;
-constexpr int SERVO_CENTER_ANGLE = 90;
-constexpr int SERVO_DEGREES_PER_STEP = 2;
+// Encoder button: short press cycles control mode, a hold past this
+// threshold cycles the OLED page instead (see loop()).
+constexpr unsigned long PAGE_CYCLE_HOLD_MS = 600;
+
+// TX has no physical outputs of its own - the encoder drives whichever
+// remote channel is currently selected (see ControlMode), and RX applies
+// it to the matching hardware (servo angle, LED channel, ...). Each
+// channel's value is accumulated from relative encoder steps (via
+// OutputLimiter) rather than recomputed from Encoder::position()
+// directly, so it clamps without windup: once a limit is hit, further
+// movement in that direction is dropped instead of silently building up,
+// and reversing direction responds immediately instead of first having
+// to travel back through the clamped range.
+enum class ControlMode : uint8_t
+{
+    Servo = 0,
+    LedRed = 1,
+    LedGreen = 2,
+    LedBlue = 3,
+    LedBrightness = 4
+};
+constexpr uint8_t CONTROL_MODE_COUNT = 5;
 
 // STATE_SNAPSHOT channel IDs (application-level, not part of the wire
 // protocol itself - see StateSnapshot.h). Gaps between numbers are
@@ -63,23 +85,113 @@ constexpr int SERVO_DEGREES_PER_STEP = 2;
 constexpr uint8_t CHANNEL_ENCODER = 1;
 constexpr uint8_t CHANNEL_BUTTON = 2;
 constexpr uint8_t CHANNEL_SERVO = 10;
+constexpr uint8_t CHANNEL_LED_RED = 11;
+constexpr uint8_t CHANNEL_LED_GREEN = 12;
+constexpr uint8_t CHANNEL_LED_BLUE = 13;
+constexpr uint8_t CHANNEL_LED_BRIGHTNESS = 14;
+
+struct ControlChannelConfig
+{
+    int minValue;
+    int maxValue;
+    int initialValue;
+    int stepPerClick;
+    StageLink::ValueChannel wireChannel;
+    StageLink::StateItemType snapshotType;
+    uint8_t snapshotChannel;
+    const char *label;
+};
+
+// Indexed by ControlMode. Servo keeps its original range/step exactly -
+// only the LED entries are new.
+constexpr ControlChannelConfig CONTROL_CHANNELS[CONTROL_MODE_COUNT] =
+{
+    { 0, 180, 90, 2, StageLink::ValueChannel::Servo, StageLink::StateItemType::Servo, CHANNEL_SERVO, "Servo" },
+    { 0, 255, 255, 5, StageLink::ValueChannel::LedRed, StageLink::StateItemType::LedRed, CHANNEL_LED_RED, "Red" },
+    { 0, 255, 255, 5, StageLink::ValueChannel::LedGreen, StageLink::StateItemType::LedGreen, CHANNEL_LED_GREEN, "Green" },
+    { 0, 255, 255, 5, StageLink::ValueChannel::LedBlue, StageLink::StateItemType::LedBlue, CHANNEL_LED_BLUE, "Blue" },
+    { 0, 255, 128, 5, StageLink::ValueChannel::LedBrightness, StageLink::StateItemType::LedBrightness, CHANNEL_LED_BRIGHTNESS, "Bright" }
+};
 
 unsigned long lastHeartbeatTime = 0;
 unsigned long lastDisplayRefresh = 0;
+unsigned long encoderButtonPressStartTime = 0;
 bool buttonWasPressed = false;
 bool inputStateSnapshotNeeded = true;
+bool capabilityRequestNeeded = true;
 bool displayReady = false;
 StageLink::StatusPageCycler pageCycler;
 StageLink::ReliableRadio radio;
 
-// Servo angle, clamped at every update (see loop()) rather than derived
-// fresh from Encoder::position() each time - this is what gives the
-// servo limit its "no windup" behavior.
-StageLink::LimitedOutput servoOutput;
+// RX's last reported device info - see CAPABILITY_RESPONSE handling in
+// loop(). Not populated until RX actually answers a request.
+StageLink::DeviceInfo remoteDeviceInfo;
+bool remoteDeviceInfoReceived = false;
 
-int currentServoAngle()
+// One clamped accumulator per control channel, indexed by ControlMode -
+// see the ControlMode/ControlChannelConfig comment above for why.
+StageLink::LimitedOutput controlOutputs[CONTROL_MODE_COUNT];
+
+// Which channel the encoder currently drives - cycled by the encoder
+// button (see loop()).
+ControlMode currentMode = ControlMode::Servo;
+
+int currentControlValue()
 {
-    return servoOutput.value;
+    return controlOutputs[static_cast<uint8_t>(currentMode)].value;
+}
+
+// Joins every capability RX reported into one space-separated line for
+// the device info page - see Display::showDeviceInfo. Never hardcodes
+// capability names itself; StageLink::capabilityName() is the one place
+// those strings live.
+void buildCapabilityLine(char *buffer, size_t bufferSize)
+{
+    buffer[0] = '\0';
+
+    for (uint8_t i = 0; i < StageLink::DEVICE_CAPABILITY_COUNT; ++i)
+    {
+        StageLink::DeviceCapability capability = static_cast<StageLink::DeviceCapability>(i);
+
+        if (!StageLink::hasCapability(remoteDeviceInfo.capabilities, capability))
+        {
+            continue;
+        }
+
+        if (buffer[0] != '\0')
+        {
+            strncat(buffer, " ", bufferSize - strlen(buffer) - 1);
+        }
+
+        strncat(buffer, StageLink::capabilityName(capability), bufferSize - strlen(buffer) - 1);
+    }
+}
+
+void printStartupBanner()
+{
+    Serial.println();
+    Serial.println("========================");
+    Serial.println(FxQ::PROJECT_BRAND);
+    Serial.println();
+    Serial.print("Product: ");
+    Serial.println(FxQ::PRODUCT_NAME);
+    Serial.print("Version: ");
+    Serial.println(FxQ::PRODUCT_VERSION);
+    Serial.print("Build: B");
+    Serial.println(FXQ_BUILD_NUMBER);
+    Serial.print("HW: ");
+    Serial.println(FxQ::HARDWARE_REVISION);
+    Serial.print("FxQ Link: ");
+    Serial.println(FxQ::LINK_VERSION);
+    Serial.print("Built: ");
+    Serial.print(FXQ_BUILD_DATE);
+    Serial.print(" ");
+    Serial.println(FXQ_BUILD_TIME);
+    Serial.print("Git: ");
+    Serial.println(FXQ_GIT_COMMIT);
+    Serial.println();
+    Serial.println("Starting...");
+    Serial.println("========================");
 }
 
 void showCurrentPage()
@@ -97,10 +209,11 @@ void showCurrentPage()
             linkState,
             Encoder::position(),
             Encoder::isButtonPressed(),
-            currentServoAngle()
+            CONTROL_CHANNELS[static_cast<uint8_t>(currentMode)].label,
+            currentControlValue()
         );
     }
-    else
+    else if (pageCycler.page() == static_cast<uint8_t>(TxPage::Diagnostics))
     {
         StageLink::RadioDiagnostics diagnostics = radio.diagnostics();
 
@@ -113,6 +226,18 @@ void showCurrentPage()
             diagnostics.packetsFailed,
             diagnostics.rssiAvailable,
             diagnostics.rssi
+        );
+    }
+    else
+    {
+        char capabilityLine[32];
+        buildCapabilityLine(capabilityLine, sizeof(capabilityLine));
+
+        Display::showDeviceInfo(
+            remoteDeviceInfoReceived,
+            remoteDeviceInfo.name,
+            remoteDeviceInfo.firmwareVersion,
+            capabilityLine
         );
     }
 }
@@ -145,14 +270,15 @@ void sendEncoderValue()
     }
 }
 
-void sendServoAngle()
+void sendControlValue(ControlMode mode)
 {
-    int angle = currentServoAngle();
+    const ControlChannelConfig &config = CONTROL_CHANNELS[static_cast<uint8_t>(mode)];
+    int value = controlOutputs[static_cast<uint8_t>(mode)].value;
 
     uint8_t valuePayload[StageLink::VALUE_UPDATE_PAYLOAD_SIZE];
     StageLink::encodeValueUpdate(
-        StageLink::ValueChannel::Servo,
-        angle,
+        config.wireChannel,
+        value,
         valuePayload
     );
 
@@ -162,12 +288,15 @@ void sendServoAngle()
             sizeof(valuePayload)
         ))
     {
-        Serial.print("Queued servo angle: ");
-        Serial.println(angle);
+        Serial.print("Queued ");
+        Serial.print(config.label);
+        Serial.print(" update: ");
+        Serial.println(value);
     }
     else
     {
-        Serial.println("Servo queue full");
+        Serial.print(config.label);
+        Serial.println(" queue full");
     }
 }
 
@@ -198,6 +327,21 @@ void sendEncoderButtonState(bool pressed)
     }
 }
 
+// Asked once after the link comes up (see inputStateSnapshotNeeded's
+// twin, capabilityRequestNeeded, in loop()) - RX answers with a
+// CAPABILITY_RESPONSE carrying its DeviceInfo.
+void sendCapabilityRequest()
+{
+    if (radio.send(StageLink::PacketType::CAPABILITY_REQUEST))
+    {
+        Serial.println("Queued capability request");
+    }
+    else
+    {
+        Serial.println("Capability request queue full");
+    }
+}
+
 // --- Full state resync (STATE_SNAPSHOT) ---
 // Sent in response to RX's STATE_REQUEST, and after a heartbeat proves
 // the link is back up following a drop (see inputStateSnapshotNeeded in
@@ -222,12 +366,18 @@ void sendCurrentInputState()
         StageLink::StateItemType::Button,
         Encoder::isButtonPressed() ? 1 : 0
     );
-    StageLink::addOrUpdateStateItem(
-        snapshot,
-        CHANNEL_SERVO,
-        StageLink::StateItemType::Servo,
-        currentServoAngle()
-    );
+    // All control channels resync regardless of which one the encoder
+    // currently drives - RX needs every channel's last known value, not
+    // just the active one.
+    for (uint8_t i = 0; i < CONTROL_MODE_COUNT; ++i)
+    {
+        StageLink::addOrUpdateStateItem(
+            snapshot,
+            CONTROL_CHANNELS[i].snapshotChannel,
+            CONTROL_CHANNELS[i].snapshotType,
+            controlOutputs[i].value
+        );
+    }
 
     uint8_t snapshotPayload[StageLink::MAX_STATE_SNAPSHOT_PAYLOAD_SIZE];
     uint8_t payloadLength = StageLink::serializeStateSnapshot(snapshot, snapshotPayload);
@@ -259,12 +409,15 @@ void setup()
         ENCODER_BUTTON_PIN
     );
 
-    StageLink::initLimitedOutput(
-        servoOutput,
-        SERVO_CENTER_ANGLE,
-        SERVO_MIN_ANGLE,
-        SERVO_MAX_ANGLE
-    );
+    for (uint8_t i = 0; i < CONTROL_MODE_COUNT; ++i)
+    {
+        StageLink::initLimitedOutput(
+            controlOutputs[i],
+            CONTROL_CHANNELS[i].initialValue,
+            CONTROL_CHANNELS[i].minValue,
+            CONTROL_CHANNELS[i].maxValue
+        );
+    }
 
     displayReady = Display::begin();
 
@@ -280,9 +433,7 @@ void setup()
 
     pageCycler.begin(TX_PAGE_COUNT);
 
-  Serial.println();
-    Serial.println("StageLink TX");
-    Serial.println("Starting reliable radio...");
+    printStartupBanner();
 
     if (!radio.begin(receiverAddress))
     {
@@ -306,34 +457,79 @@ void loop()
             Serial.println("State request received");
             sendCurrentInputState();
         }
+        else if (incomingPacket.type == StageLink::PacketType::CAPABILITY_RESPONSE)
+        {
+            if (StageLink::deserializeDeviceInfo(
+                    incomingPacket.payload,
+                    incomingPacket.payloadLength,
+                    remoteDeviceInfo
+                ))
+            {
+                remoteDeviceInfoReceived = true;
+
+                Serial.print("Capability response received: ");
+                Serial.println(remoteDeviceInfo.name);
+
+                showCurrentPage();
+            }
+            else
+            {
+                Serial.println("Malformed capability response received");
+            }
+        }
     }
 
     int encoderTurn = Encoder::consumeTurn();
     if (encoderTurn != 0)
     {
         // Apply as a relative step, not a recomputation from absolute
-        // position - this is what makes the servo limit clamp without
-        // windup (see servoOutput / OutputLimiter.h).
-        StageLink::applyLimitedOutputDelta(servoOutput, encoderTurn * SERVO_DEGREES_PER_STEP);
+        // position - this is what makes each channel's limit clamp
+        // without windup (see controlOutputs / OutputLimiter.h).
+        const ControlChannelConfig &activeConfig = CONTROL_CHANNELS[static_cast<uint8_t>(currentMode)];
+        StageLink::applyLimitedOutputDelta(
+            controlOutputs[static_cast<uint8_t>(currentMode)],
+            encoderTurn * activeConfig.stepPerClick
+        );
 
         Serial.print("Encoder: ");
         Serial.println(Encoder::position());
 
         sendEncoderValue();
-        sendServoAngle();
+        sendControlValue(currentMode);
         showCurrentPage();
     }
 
-    if (Encoder::buttonPressed())
-    {
-        pageCycler.next();
-        showCurrentPage();
-    }
-
+    // The encoder button has two jobs, distinguished by hold duration and
+    // only resolved on release (you can't know which it'll be while still
+    // held): a short press cycles which channel the encoder drives
+    // (Servo -> Red -> Green -> Blue -> Brightness -> Servo...), a hold
+    // past PAGE_CYCLE_HOLD_MS instead cycles the OLED page
+    // (Status -> Diagnostics -> Device Info -> Status...). Either way,
+    // BUTTON_EVENT still goes to RX on every press/release exactly as
+    // before - this only adds local dispatch on top of that.
     bool encoderButtonPressed;
     if (Encoder::consumeButtonStateChange(encoderButtonPressed))
     {
         sendEncoderButtonState(encoderButtonPressed);
+
+        if (encoderButtonPressed)
+        {
+            encoderButtonPressStartTime = millis();
+        }
+        else if (millis() - encoderButtonPressStartTime >= PAGE_CYCLE_HOLD_MS)
+        {
+            pageCycler.next();
+        }
+        else
+        {
+            currentMode = static_cast<ControlMode>(
+                (static_cast<uint8_t>(currentMode) + 1) % CONTROL_MODE_COUNT
+            );
+
+            Serial.print("Control mode: ");
+            Serial.println(CONTROL_CHANNELS[static_cast<uint8_t>(currentMode)].label);
+        }
+
         showCurrentPage();
     }
 
@@ -357,6 +553,13 @@ void loop()
                 sendCurrentInputState();
                 inputStateSnapshotNeeded = false;
             }
+
+            if (result.type == StageLink::PacketType::Heartbeat &&
+                capabilityRequestNeeded)
+            {
+                sendCapabilityRequest();
+                capabilityRequestNeeded = false;
+            }
         }
         else
         {
@@ -367,6 +570,7 @@ void loop()
             if (result.type == StageLink::PacketType::Heartbeat)
             {
                 inputStateSnapshotNeeded = true;
+                capabilityRequestNeeded = true;
             }
         }
     }

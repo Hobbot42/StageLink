@@ -2,8 +2,14 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include "TxQInfo.h"
+#include "FxQBuildInfo.h"
 
-// StageLink Display (TX)
+// FxQ
+// Product: TxQ
+// Version: v0.9.0
+//
+// Project information is maintained in FxQInfo.h
 
 namespace
 {
@@ -20,6 +26,19 @@ namespace
         &Wire,
         -1
     );
+
+    // Appended to every screen so the firmware actually running on the
+    // board is always visible - see FxQInfo.h/FxQBuildInfo.h for the
+    // underlying values. Text wraps automatically (Adafruit_GFX default)
+    // if it doesn't fit the current line.
+    void printIdentityLine()
+    {
+        display.print(FxQ::PRODUCT_NAME);
+        display.print(" ");
+        display.print(FxQ::PRODUCT_VERSION);
+        display.print(" B");
+        display.println(FXQ_BUILD_NUMBER);
+    }
 }
 
 bool Display::begin()
@@ -44,11 +63,12 @@ void Display::showReady()
     display.setTextSize(2);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 0);
-    display.println("StageLink");
+    display.println(FxQ::PRODUCT_NAME);
 
     display.setTextSize(1);
     display.println();
     display.println("READY");
+    printIdentityLine();
 
     display.display();
 }
@@ -73,7 +93,8 @@ void Display::showStatus(
     const char *linkState,
     int encoderValue,
     bool buttonPressed,
-    int servoAngle
+    const char *controlModeLabel,
+    int controlModeValue
 )
 {
     display.clearDisplay();
@@ -81,7 +102,7 @@ void Display::showStatus(
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 0);
-    display.println("StageLink TX");
+    printIdentityLine();
 
     display.print("Link: ");
     display.println(linkState);
@@ -89,9 +110,11 @@ void Display::showStatus(
     display.print("Encoder: ");
     display.println(encoderValue);
 
-    display.print("Servo: ");
-    display.print(servoAngle);
-    display.println(" deg");
+    // Whichever channel the encoder currently controls - see ControlMode
+    // in main.cpp. The encoder button cycles this.
+    display.print(controlModeLabel);
+    display.print(": ");
+    display.println(controlModeValue);
 
     display.print("Button: ");
     display.println(buttonPressed ? "PRESSED" : "RELEASED");
@@ -115,7 +138,8 @@ void Display::showDiagnostics(
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 0);
-    display.println("TX Diagnostics");
+    printIdentityLine();
+    display.println("Diagnostics");
 
     display.print("Link: ");
     display.println(linkState);
@@ -143,6 +167,39 @@ void Display::showDiagnostics(
 
     display.print("Failed: ");
     display.println(failedCount);
+
+    display.display();
+}
+
+void Display::showDeviceInfo(
+    bool infoReceived,
+    const char *deviceName,
+    const char *firmwareVersion,
+    const char *capabilitiesLine
+)
+{
+    display.clearDisplay();
+
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    printIdentityLine();
+    display.println("FxQ Device");
+
+    if (!infoReceived)
+    {
+        display.println("No response yet");
+    }
+    else
+    {
+        display.println(deviceName);
+
+        display.print("FW: ");
+        display.println(firmwareVersion);
+
+        display.print("Caps: ");
+        display.println(capabilitiesLine);
+    }
 
     display.display();
 }

@@ -22,7 +22,11 @@ namespace StageLink
         Servo = 2,
         Dmx = 3,
         StepperPosition = 4,
-        DigitalOutput = 5
+        DigitalOutput = 5,
+        LedRed = 6,
+        LedGreen = 7,
+        LedBlue = 8,
+        LedBrightness = 9
     };
 
     constexpr uint8_t MAX_STATE_ITEMS = 16;

@@ -1,6 +1,13 @@
-// StageLink Display (TX)
+// FxQ
+// Product: TxQ
+// Version: v0.9.0
+//
+// Project information is maintained in FxQInfo.h
+//
+// TxQ Display
 // Drives the TX unit's OLED. Shows TX's own encoder/button/servo state
-// on the status page, and ReliableRadio's diagnostics on the other.
+// on the status page, ReliableRadio's diagnostics on another, and RX's
+// self-reported device info (see DeviceInfo.h) on a third.
 // Belongs to: StageLink_Tx (StageLink_Rx has its own Display with a
 // different set of pages - not shared, since TX and RX show different
 // information).
@@ -22,7 +29,8 @@ public:
         const char *linkState,
         int encoderValue,
         bool buttonPressed,
-        int servoAngle
+        const char *controlModeLabel,
+        int controlModeValue
     );
 
     static void showDiagnostics(
@@ -34,5 +42,12 @@ public:
         uint32_t failedCount,
         bool rssiAvailable,
         int8_t rssi
+    );
+
+    static void showDeviceInfo(
+        bool infoReceived,
+        const char *deviceName,
+        const char *firmwareVersion,
+        const char *capabilitiesLine
     );
 };

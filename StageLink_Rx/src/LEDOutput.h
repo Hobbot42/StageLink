@@ -1,8 +1,11 @@
 // StageLink LEDOutput
 // Drives one addressable LED strip as a single RGB light - every pixel
 // set to the same color. Maintains Red/Green/Blue/Brightness as internal
-// state (see setRed/setGreen/setBlue/setBrightness); any channel changing
-// refreshes the physical strip immediately.
+// state (see setRed/setGreen/setBlue/setBrightness); each setter updates
+// a target value instantly, and tick() (called every loop(), see RX
+// main.cpp) eases the actual displayed value toward that target a step
+// at a time, so a value change fades in rather than snapping instantly -
+// bigger jumps naturally take longer since they need more steps.
 //
 // OutputManager still only knows "one channel -> one OutputDevice", so
 // LEDOutput's four logical channels are exposed as four separate
@@ -67,12 +70,18 @@ public:
     // needed here.
     bool reloadConfiguration();
 
-    // Each 0-255 (clamped). Updates the stored channel and immediately
-    // refreshes the physical strip.
+    // Each 0-255 (clamped). Sets the target for that channel - see the
+    // class comment. The physical strip doesn't change until tick()
+    // steps toward it.
     void setRed(int32_t value);
     void setGreen(int32_t value);
     void setBlue(int32_t value);
     void setBrightness(int32_t value);
+
+    // Call every loop(). Rate-limited internally - a no-op most calls,
+    // only actually steps (and refreshes the strip) once per
+    // FADE_STEP_INTERVAL_MS.
+    void tick();
 
 private:
     void refresh();
@@ -83,10 +92,19 @@ private:
     uint16_t ledCount = 0;
     LEDStripDriver *driver = nullptr;
 
+    // Currently displayed - what refresh() actually sends to the strip.
     uint8_t red = 255;
     uint8_t green = 255;
     uint8_t blue = 255;
     uint8_t brightness = 0;
+
+    // Where tick() is easing the displayed values toward.
+    uint8_t targetRed = 255;
+    uint8_t targetGreen = 255;
+    uint8_t targetBlue = 255;
+    uint8_t targetBrightness = 0;
+
+    unsigned long lastFadeStepTime = 0;
 };
 
 // Thin OutputDevice adapter that forwards update() to one channel setter

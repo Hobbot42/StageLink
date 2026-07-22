@@ -6,3 +6,5 @@
 .DS_Store
 .pio
 .vscode
+build_number.txt
+src/FxQBuildInfo.h

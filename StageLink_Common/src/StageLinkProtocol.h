@@ -32,6 +32,8 @@ namespace StageLink
         STATE_REQUEST = 8,    // ask peer to resend its full current state
         STATE_SNAPSHOT = 9,   // full state resync, see StateSnapshot.h
         VALUE_UPDATE = 10,    // live single-channel value change (encoder/servo)
+        CAPABILITY_REQUEST = 11,  // ask peer to report device info + capabilities
+        CAPABILITY_RESPONSE = 12, // reply to CAPABILITY_REQUEST, see DeviceInfo.h
         Acknowledgement = 255 // ack for a received packet's sequence/session
     };
 
@@ -48,7 +50,11 @@ namespace StageLink
     enum class ValueChannel : uint8_t
     {
         Encoder = 0,
-        Servo = 1
+        Servo = 1,
+        LedRed = 2,
+        LedGreen = 3,
+        LedBlue = 4,
+        LedBrightness = 5
     };
 
     constexpr uint8_t VALUE_UPDATE_PAYLOAD_SIZE = 5;
@@ -131,6 +137,10 @@ namespace StageLink
                 return "state snapshot";
             case PacketType::VALUE_UPDATE:
                 return "value update";
+            case PacketType::CAPABILITY_REQUEST:
+                return "capability request";
+            case PacketType::CAPABILITY_RESPONSE:
+                return "capability response";
             case PacketType::Acknowledgement:
                 return "acknowledgement";
             default:

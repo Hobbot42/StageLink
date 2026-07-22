@@ -1,4 +1,10 @@
-// StageLink Display (RX)
+// FxQ
+// Product: RxQ
+// Version: v0.9.0
+//
+// Project information is maintained in FxQInfo.h
+//
+// RxQ Display
 // Drives the RX unit's OLED. The main status page (showLinkAndEncoder)
 // shows both TX's remote state and RX's own resulting state (servo
 // angle) side by side; the other page shows ReliableRadio's diagnostics.
