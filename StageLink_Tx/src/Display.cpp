@@ -4,6 +4,8 @@
 #include <Adafruit_SSD1306.h>
 #include "TxQInfo.h"
 #include "FxQBuildInfo.h"
+#include "DeviceInfo.h"
+#include "OutputList.h"
 
 // FxQ
 // Product: TxQ
@@ -171,12 +173,7 @@ void Display::showDiagnostics(
     display.display();
 }
 
-void Display::showDeviceInfo(
-    bool infoReceived,
-    const char *deviceName,
-    const char *firmwareVersion,
-    const char *capabilitiesLine
-)
+void Display::showDeviceInfo(const RemoteDevice &remote)
 {
     display.clearDisplay();
 
@@ -184,21 +181,56 @@ void Display::showDeviceInfo(
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 0);
     printIdentityLine();
-    display.println("FxQ Device");
 
-    if (!infoReceived)
+    // Three states, matching how far discovery has actually gotten -
+    // see RemoteDevice.h. Nothing here is stored separately from
+    // RemoteDevice; this just decides how to word what it already has.
+    if (!remote.connected)
     {
-        display.println("No response yet");
+        display.println("RX: Offline");
+        display.display();
+        return;
     }
-    else
+
+    if (!remote.hasDeviceInfo || !remote.hasOutputList)
     {
-        display.println(deviceName);
+        display.println("RX: Connected");
+        display.println("Device: Waiting");
+        display.display();
+        return;
+    }
 
-        display.print("FW: ");
-        display.println(firmwareVersion);
+    display.print("RX: ");
+    display.println(remote.info.name);
 
-        display.print("Caps: ");
-        display.println(capabilitiesLine);
+    display.print("FW: ");
+    display.println(remote.info.firmwareVersion);
+
+    display.println("Outputs:");
+
+    // Show what fits and say how many more there are rather than
+    // scrolling - see RemoteDevice.h/OutputList.h for why the count can
+    // exceed what a 128x64 OLED can list one-per-line alongside the
+    // other lines on this page.
+    constexpr uint8_t MAX_DISPLAYED_OUTPUTS = 3;
+    uint8_t shown = remote.outputs.count < MAX_DISPLAYED_OUTPUTS
+        ? remote.outputs.count
+        : MAX_DISPLAYED_OUTPUTS;
+
+    for (uint8_t i = 0; i < shown; ++i)
+    {
+        const StageLink::OutputDescriptor &descriptor = remote.outputs.outputs[i];
+        display.print("  ");
+        display.print(StageLink::capabilityName(descriptor.capability));
+        display.print(" #");
+        display.println(descriptor.index);
+    }
+
+    if (remote.outputs.count > shown)
+    {
+        display.print("  +");
+        display.print(remote.outputs.count - shown);
+        display.println(" more");
     }
 
     display.display();

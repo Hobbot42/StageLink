@@ -150,32 +150,6 @@ int currentControlValue()
     return controlOutputs[static_cast<uint8_t>(currentMode)].value;
 }
 
-// Joins every capability RX reported into one space-separated line for
-// the device info page - see Display::showDeviceInfo. Never hardcodes
-// capability names itself; StageLink::capabilityName() is the one place
-// those strings live.
-void buildCapabilityLine(char *buffer, size_t bufferSize)
-{
-    buffer[0] = '\0';
-
-    for (uint8_t i = 0; i < StageLink::DEVICE_CAPABILITY_COUNT; ++i)
-    {
-        StageLink::DeviceCapability capability = static_cast<StageLink::DeviceCapability>(i);
-
-        if (!StageLink::hasCapability(remoteDevice.info.capabilities, capability))
-        {
-            continue;
-        }
-
-        if (buffer[0] != '\0')
-        {
-            strncat(buffer, " ", bufferSize - strlen(buffer) - 1);
-        }
-
-        strncat(buffer, StageLink::capabilityName(capability), bufferSize - strlen(buffer) - 1);
-    }
-}
-
 void printStartupBanner()
 {
     Serial.println();
@@ -239,15 +213,7 @@ void showCurrentPage()
     }
     else
     {
-        char capabilityLine[32];
-        buildCapabilityLine(capabilityLine, sizeof(capabilityLine));
-
-        Display::showDeviceInfo(
-            remoteDevice.hasDeviceInfo,
-            remoteDevice.info.name,
-            remoteDevice.info.firmwareVersion,
-            capabilityLine
-        );
+        Display::showDeviceInfo(remoteDevice);
     }
 }
 

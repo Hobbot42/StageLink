@@ -7,7 +7,7 @@
 // TxQ Display
 // Drives the TX unit's OLED. Shows TX's own encoder/button/servo state
 // on the status page, ReliableRadio's diagnostics on another, and RX's
-// self-reported device info (see DeviceInfo.h) on a third.
+// discovered device/output state (see RemoteDevice.h) on a third.
 // Belongs to: StageLink_Tx (StageLink_Rx has its own Display with a
 // different set of pages - not shared, since TX and RX show different
 // information).
@@ -15,6 +15,7 @@
 #pragma once
 
 #include <cstdint>
+#include "RemoteDevice.h"
 
 class Display
 {
@@ -44,10 +45,9 @@ public:
         int8_t rssi
     );
 
-    static void showDeviceInfo(
-        bool infoReceived,
-        const char *deviceName,
-        const char *firmwareVersion,
-        const char *capabilitiesLine
-    );
+    // Reads directly from RemoteDevice - connected/hasDeviceInfo/
+    // hasOutputList/info/outputs - rather than taking individually
+    // unpacked parameters, so RemoteDevice stays the single source of
+    // truth for what's known about RX (see RemoteDevice.h).
+    static void showDeviceInfo(const RemoteDevice &remote);
 };
