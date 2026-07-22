@@ -107,15 +107,22 @@ struct ControlChannelConfig
     const char *label;
 };
 
-// Indexed by ControlMode. Servo keeps its original range/step exactly -
-// only the LED entries are new.
+// Indexed by ControlMode. initialValue is the safe startup default used
+// whenever there's no saved scene/state to restore (there isn't one yet
+// - see ControlChannelConfig's initialValue field) - Servo's own safe
+// default (90, centered) predates this and is unchanged; the LED entries
+// were previously seeded bright/white for on-bench visibility, now off
+// to match RX's own boot-safe default (see StageLink_Rx/LEDOutput.cpp).
+// If saved-state restore is added later, it overrides these, it doesn't
+// replace them - initialValue stays the fallback for a device with
+// nothing saved yet.
 constexpr ControlChannelConfig CONTROL_CHANNELS[CONTROL_MODE_COUNT] =
 {
     { 0, 180, 90, 2, StageLink::ValueChannel::Servo, StageLink::StateItemType::Servo, CHANNEL_SERVO, "Servo" },
-    { 0, 255, 255, 5, StageLink::ValueChannel::LedRed, StageLink::StateItemType::LedRed, CHANNEL_LED_RED, "Red" },
-    { 0, 255, 255, 5, StageLink::ValueChannel::LedGreen, StageLink::StateItemType::LedGreen, CHANNEL_LED_GREEN, "Green" },
-    { 0, 255, 255, 5, StageLink::ValueChannel::LedBlue, StageLink::StateItemType::LedBlue, CHANNEL_LED_BLUE, "Blue" },
-    { 0, 255, 128, 5, StageLink::ValueChannel::LedBrightness, StageLink::StateItemType::LedBrightness, CHANNEL_LED_BRIGHTNESS, "Bright" }
+    { 0, 255, 0, 5, StageLink::ValueChannel::LedRed, StageLink::StateItemType::LedRed, CHANNEL_LED_RED, "Red" },
+    { 0, 255, 0, 5, StageLink::ValueChannel::LedGreen, StageLink::StateItemType::LedGreen, CHANNEL_LED_GREEN, "Green" },
+    { 0, 255, 0, 5, StageLink::ValueChannel::LedBlue, StageLink::StateItemType::LedBlue, CHANNEL_LED_BLUE, "Blue" },
+    { 0, 255, 0, 5, StageLink::ValueChannel::LedBrightness, StageLink::StateItemType::LedBrightness, CHANNEL_LED_BRIGHTNESS, "Bright" }
 };
 
 unsigned long lastHeartbeatTime = 0;
