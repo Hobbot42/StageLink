@@ -61,7 +61,10 @@ constexpr uint8_t SERVO_PIN = 19;
 // StateSnapshot channel IDs, both of which are decoded first and then
 // routed through here.
 constexpr uint8_t OUTPUT_CHANNEL_SERVO = 1;
-constexpr uint8_t OUTPUT_CHANNEL_LED = 2;
+constexpr uint8_t OUTPUT_CHANNEL_LED_BRIGHTNESS = 2;
+constexpr uint8_t OUTPUT_CHANNEL_LED_RED = 3;
+constexpr uint8_t OUTPUT_CHANNEL_LED_GREEN = 4;
+constexpr uint8_t OUTPUT_CHANNEL_LED_BLUE = 5;
 
 unsigned long cueFlashUntil = 0;
 unsigned long lastDisplayRefresh = 0;
@@ -79,6 +82,9 @@ StageLink::ReliableRadio radio;
 StageLink::OutputManager outputManager;
 ServoOutput servoOutputDevice(SERVO_PIN);
 LEDOutput ledOutputDevice;
+LEDChannelProxy ledRedProxy(ledOutputDevice, LEDChannelProxy::Channel::Red);
+LEDChannelProxy ledGreenProxy(ledOutputDevice, LEDChannelProxy::Channel::Green);
+LEDChannelProxy ledBlueProxy(ledOutputDevice, LEDChannelProxy::Channel::Blue);
 
 const char *linkStateText()
 {
@@ -189,10 +195,14 @@ void setup()
         Serial.println("Servo output failed to initialize");
     }
 
-    if (!outputManager.registerDevice(OUTPUT_CHANNEL_LED, &ledOutputDevice))
+    if (!outputManager.registerDevice(OUTPUT_CHANNEL_LED_BRIGHTNESS, &ledOutputDevice))
     {
         Serial.println("LED output failed to initialize");
     }
+
+    outputManager.registerDevice(OUTPUT_CHANNEL_LED_RED, &ledRedProxy);
+    outputManager.registerDevice(OUTPUT_CHANNEL_LED_GREEN, &ledGreenProxy);
+    outputManager.registerDevice(OUTPUT_CHANNEL_LED_BLUE, &ledBlueProxy);
 
     displayReady = Display::begin();
     if (!displayReady)
