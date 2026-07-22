@@ -39,3 +39,8 @@ void ServoOutput::diagnostics()
 {
     // Placeholder - nothing to report yet.
 }
+
+void ServoOutput::refreshState()
+{
+    // Placeholder - see the declaration comment in ServoOutput.h.
+}

@@ -63,6 +63,14 @@ public:
 
     void diagnostics() override;
 
+    // Reapplies the currently displayed red/green/blue/brightness to the
+    // driver - no state changes, no fade, just re-sends what's already
+    // held here. See OutputDevice::refreshState(); called periodically
+    // (see RX main.cpp) so the strip recovers on its own if it lost power
+    // independently of RX (e.g. unplugged and replugged) while RX still
+    // had the correct values in memory.
+    void refreshState() override;
+
     // Re-reads protocol/pins/count/brightness from ConfigManager and
     // (re)builds the underlying driver accordingly. begin() just calls
     // this once at startup - a future settings menu can call it again
@@ -129,6 +137,11 @@ public:
     void update(int32_t value) override;
 
     void diagnostics() override;
+
+    // No-op - proxies don't own hardware. The owner's own registration
+    // (under its own channel) already refreshes the shared strip once;
+    // see LEDOutput::refreshState().
+    void refreshState() override;
 
 private:
     LEDOutput &owner;

@@ -248,6 +248,11 @@ void LEDOutput::diagnostics()
     // Placeholder - nothing to report yet.
 }
 
+void LEDOutput::refreshState()
+{
+    refresh();
+}
+
 LEDChannelProxy::LEDChannelProxy(LEDOutput &owner, Channel channel)
     : owner(owner), channel(channel)
 {
@@ -277,4 +282,9 @@ void LEDChannelProxy::update(int32_t value)
 void LEDChannelProxy::diagnostics()
 {
     // Placeholder - nothing to report yet.
+}
+
+void LEDChannelProxy::refreshState()
+{
+    // No-op - see the declaration comment in LEDOutput.h.
 }

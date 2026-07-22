@@ -36,6 +36,16 @@ namespace StageLink
         // Applies one new value for this device's channel.
         virtual void update(int32_t value) = 0;
 
+        // Reapplies this device's already-stored current value to the
+        // physical hardware, without changing that value. Pure recovery
+        // mechanism - meant to be called periodically (see
+        // OutputManager::refreshAll()) so a device that lost power
+        // independently of the controller (e.g. an LED strip unplugged
+        // and replugged) comes back showing the right thing on its own,
+        // without waiting for the next update(). Devices with no
+        // meaningful state to reapply can implement this as a no-op.
+        virtual void refreshState() = 0;
+
         // Placeholder for future device status reporting (fault flags,
         // current position, temperature, ...). No shape defined yet -
         // deliberately left minimal until a real device needs it.

@@ -34,6 +34,13 @@ namespace StageLink
         // caller.
         bool update(uint8_t channel, int32_t value);
 
+        // Calls refreshState() on every registered device - see
+        // OutputDevice::refreshState(). Meant to be driven by a periodic
+        // timer in application code (e.g. RX main.cpp), not every loop()
+        // iteration - it's a recovery mechanism, not part of the
+        // immediate update path.
+        void refreshAll();
+
     private:
         struct Binding
         {

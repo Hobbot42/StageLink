@@ -27,3 +27,11 @@ bool StageLink::OutputManager::update(uint8_t channel, int32_t value)
 
     return false;
 }
+
+void StageLink::OutputManager::refreshAll()
+{
+    for (uint8_t i = 0; i < count; ++i)
+    {
+        bindings[i].device->refreshState();
+    }
+}

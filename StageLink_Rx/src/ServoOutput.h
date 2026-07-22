@@ -21,6 +21,11 @@ public:
 
     void diagnostics() override;
 
+    // No-op for now - update() doesn't retain the last commanded angle,
+    // so there's nothing stored here to reapply yet. See
+    // OutputDevice::refreshState().
+    void refreshState() override;
+
 private:
     uint8_t pin;
     int servoMinAngle;

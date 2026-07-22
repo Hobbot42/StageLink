@@ -63,6 +63,13 @@ enum class RxPage : uint8_t
 constexpr uint8_t RX_PAGE_COUNT = 2;
 constexpr unsigned long DISPLAY_REFRESH_INTERVAL_MS = 250;
 
+// Periodic hardware-state recovery, not part of the update path - see
+// OutputManager::refreshAll()/OutputDevice::refreshState(). Reapplies
+// each output's already-known current value so one that lost power
+// independently of RX (e.g. an LED strip unplugged and replugged) comes
+// back correct on its own, without needing a new radio packet.
+constexpr unsigned long OUTPUT_REFRESH_INTERVAL_MS = 750;
+
 // RX's own local encoder (button only used for local page cycling - its
 // rotation is read for the diagnostics display but not transmitted).
 constexpr uint8_t ENCODER_CLK_PIN = 32;
@@ -82,6 +89,7 @@ constexpr uint8_t OUTPUT_CHANNEL_LED_BLUE = 5;
 
 unsigned long cueFlashUntil = 0;
 unsigned long lastDisplayRefresh = 0;
+unsigned long lastOutputRefresh = 0;
 // TX's remote encoder position/button state, as last received over radio.
 int encoderValue = 0;
 int servoAngle = 0;
@@ -566,6 +574,15 @@ void loop()
     {
         showCurrentPage();
         lastDisplayRefresh = millis();
+    }
+
+    // Recovery only - state changes still apply immediately via
+    // outputManager.update() above, this just guards against an output
+    // device losing power on its own.
+    if (millis() - lastOutputRefresh >= OUTPUT_REFRESH_INTERVAL_MS)
+    {
+        outputManager.refreshAll();
+        lastOutputRefresh = millis();
     }
 
     // Briefly override the status LED to acknowledge a received cue,
