@@ -24,6 +24,13 @@ namespace StageLink
         // initialization failed, so callers (OutputManager::registerDevice)
         // can report it rather than silently proceeding as if the device
         // were ready.
+        //
+        // Must leave the physical output in its own safe default state
+        // (e.g. LED off, relay open) before returning, explicitly - not by
+        // relying on whatever a driver library or hardware happens to
+        // power up as. This runs before any StateSnapshot/VALUE_UPDATE is
+        // applied, so it's the only thing standing between power-up and a
+        // real commanded value.
         virtual bool begin() = 0;
 
         // Applies one new value for this device's channel.

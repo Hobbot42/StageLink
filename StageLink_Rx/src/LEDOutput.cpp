@@ -27,7 +27,6 @@ namespace
     constexpr uint8_t DEFAULT_DATA_PIN = 4;
     constexpr uint8_t DEFAULT_CLOCK_PIN = 5;
     constexpr int32_t DEFAULT_LED_COUNT = 8;
-    constexpr uint8_t DEFAULT_LED_BRIGHTNESS = 128;
 
     // How often (and how far) tick() steps a channel toward its target.
     // Duration scales with distance: a full 0-255 sweep takes ~1.3s
@@ -168,16 +167,19 @@ bool LEDOutput::reloadConfiguration()
     driver = createDriver(protocol);
     bool success = driver->begin(dataPin, clockPin, ledCount);
 
-    // Reload starts from white at the configured brightness, same
-    // starting look as before RGB support existed - live channel updates
-    // (setRed/setGreen/setBlue/setBrightness) take it from there. Current
-    // and target are set together here so reload itself doesn't fade in
-    // from black - only later live changes do.
-    red = targetRed = 255;
-    green = targetGreen = 255;
-    blue = targetBlue = 255;
-    brightness = targetBrightness =
-        StageLink::ConfigManager::getUInt8("ledBrightness", DEFAULT_LED_BRIGHTNESS);
+    // Safe startup state: fully off. Hardcoded, not read from
+    // ConfigManager or left to whatever the driver library defaults to -
+    // hardware testing showed the strip briefly flashing at full/white
+    // brightness on RX power-up, before the first StateSnapshot arrived
+    // to set the real commanded value. Current and target are set
+    // together (not faded) so reload itself never becomes visible; the
+    // strip stays dark until a real command (VALUE_UPDATE or
+    // StateSnapshot) moves the target, at which point tick() fades it in
+    // exactly as it fades any other live change.
+    red = targetRed = 0;
+    green = targetGreen = 0;
+    blue = targetBlue = 0;
+    brightness = targetBrightness = 0;
     refresh();
 
     return success;
