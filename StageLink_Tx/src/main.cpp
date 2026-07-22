@@ -22,6 +22,9 @@
 //   TX -> RX  STATE_SNAPSHOT   full resync reply (see StateSnapshot.h)
 //   TX -> RX  CAPABILITY_REQUEST   "report your device info/capabilities"
 //   RX -> TX  CAPABILITY_RESPONSE  reply, see DeviceInfo.h
+//   TX -> RX  OUTPUT_LIST_REQUEST  "enumerate your output instances",
+//                                   sent once DeviceInfo is in hand
+//   RX -> TX  OUTPUT_LIST_RESPONSE reply, see OutputList.h
 #include <Arduino.h>
 #include "Display.h"
 #include "ReliableRadio.h"
@@ -33,6 +36,8 @@
 #include "OutputLimiter.h"
 #include "ConfigManager.h"
 #include "DeviceInfo.h"
+#include "OutputList.h"
+#include "RemoteDevice.h"
 #include "TxQInfo.h"
 #include "FxQBuildInfo.h"
 
@@ -123,10 +128,14 @@ bool displayReady = false;
 StageLink::StatusPageCycler pageCycler;
 StageLink::ReliableRadio radio;
 
-// RX's last reported device info - see CAPABILITY_RESPONSE handling in
-// loop(). Not populated until RX actually answers a request.
-StageLink::DeviceInfo remoteDeviceInfo;
-bool remoteDeviceInfoReceived = false;
+// Everything TX has learned about the connected RX - device info, output
+// list, and (once the link/discovery status flags say so) whether it's
+// ready to build UI/control mapping from. See RemoteDevice.h. Requested
+// once DeviceInfo is in hand (not on a heartbeat timer like
+// capabilityRequestNeeded - there's nothing to ask for until we know RX
+// exists). No OLED page consumes the output list yet, see Serial logging
+// on receipt (RemoteDevice::logSummary()).
+RemoteDevice remoteDevice;
 
 // One clamped accumulator per control channel, indexed by ControlMode -
 // see the ControlMode/ControlChannelConfig comment above for why.
@@ -153,7 +162,7 @@ void buildCapabilityLine(char *buffer, size_t bufferSize)
     {
         StageLink::DeviceCapability capability = static_cast<StageLink::DeviceCapability>(i);
 
-        if (!StageLink::hasCapability(remoteDeviceInfo.capabilities, capability))
+        if (!StageLink::hasCapability(remoteDevice.info.capabilities, capability))
         {
             continue;
         }
@@ -234,9 +243,9 @@ void showCurrentPage()
         buildCapabilityLine(capabilityLine, sizeof(capabilityLine));
 
         Display::showDeviceInfo(
-            remoteDeviceInfoReceived,
-            remoteDeviceInfo.name,
-            remoteDeviceInfo.firmwareVersion,
+            remoteDevice.hasDeviceInfo,
+            remoteDevice.info.name,
+            remoteDevice.info.firmwareVersion,
             capabilityLine
         );
     }
@@ -339,6 +348,21 @@ void sendCapabilityRequest()
     else
     {
         Serial.println("Capability request queue full");
+    }
+}
+
+// Sent once a CAPABILITY_RESPONSE has been successfully parsed (see
+// loop()) - RX answers with an OUTPUT_LIST_RESPONSE enumerating its
+// actual output instances.
+void sendOutputListRequest()
+{
+    if (radio.send(StageLink::PacketType::OUTPUT_LIST_REQUEST))
+    {
+        Serial.println("Queued output list request");
+    }
+    else
+    {
+        Serial.println("Output list request queue full");
     }
 }
 
@@ -459,22 +483,43 @@ void loop()
         }
         else if (incomingPacket.type == StageLink::PacketType::CAPABILITY_RESPONSE)
         {
+            StageLink::DeviceInfo info;
+
             if (StageLink::deserializeDeviceInfo(
                     incomingPacket.payload,
                     incomingPacket.payloadLength,
-                    remoteDeviceInfo
+                    info
                 ))
             {
-                remoteDeviceInfoReceived = true;
+                remoteDevice.setDeviceInfo(info);
 
                 Serial.print("Capability response received: ");
-                Serial.println(remoteDeviceInfo.name);
+                Serial.println(remoteDevice.info.name);
 
                 showCurrentPage();
+                sendOutputListRequest();
             }
             else
             {
                 Serial.println("Malformed capability response received");
+            }
+        }
+        else if (incomingPacket.type == StageLink::PacketType::OUTPUT_LIST_RESPONSE)
+        {
+            StageLink::OutputList list;
+
+            if (StageLink::deserializeOutputList(
+                    incomingPacket.payload,
+                    incomingPacket.payloadLength,
+                    list
+                ))
+            {
+                remoteDevice.setOutputList(list);
+                remoteDevice.logSummary();
+            }
+            else
+            {
+                Serial.println("Malformed output list response received");
             }
         }
     }
@@ -607,7 +652,10 @@ void loop()
 
     buttonWasPressed = buttonPressed;
 
-    if (radio.isPeerOnline())
+    bool peerOnline = radio.isPeerOnline();
+    remoteDevice.setConnected(peerOnline);
+
+    if (peerOnline)
     {
         StatusLED::setReady();
     }

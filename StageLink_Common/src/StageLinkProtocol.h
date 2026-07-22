@@ -34,6 +34,8 @@ namespace StageLink
         VALUE_UPDATE = 10,    // live single-channel value change (encoder/servo)
         CAPABILITY_REQUEST = 11,  // ask peer to report device info + capabilities
         CAPABILITY_RESPONSE = 12, // reply to CAPABILITY_REQUEST, see DeviceInfo.h
+        OUTPUT_LIST_REQUEST = 13,  // ask peer to enumerate its output instances
+        OUTPUT_LIST_RESPONSE = 14, // reply to OUTPUT_LIST_REQUEST, see OutputList.h
         Acknowledgement = 255 // ack for a received packet's sequence/session
     };
 
@@ -141,6 +143,10 @@ namespace StageLink
                 return "capability request";
             case PacketType::CAPABILITY_RESPONSE:
                 return "capability response";
+            case PacketType::OUTPUT_LIST_REQUEST:
+                return "output list request";
+            case PacketType::OUTPUT_LIST_RESPONSE:
+                return "output list response";
             case PacketType::Acknowledgement:
                 return "acknowledgement";
             default:

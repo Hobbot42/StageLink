@@ -25,6 +25,8 @@
 //   TX -> RX  Heartbeat        periodic liveness signal, drives LinkState
 //   TX -> RX  CAPABILITY_REQUEST   "report your device info/capabilities"
 //   RX -> TX  CAPABILITY_RESPONSE  reply, see DeviceInfo.h
+//   TX -> RX  OUTPUT_LIST_REQUEST  "enumerate your output instances"
+//   RX -> TX  OUTPUT_LIST_RESPONSE reply, see OutputList.h
 #include <Arduino.h>
 #include "Display.h"
 #include "ReliableRadio.h"
@@ -37,6 +39,7 @@
 #include "OutputManager.h"
 #include "LEDOutput.h"
 #include "DeviceInfo.h"
+#include "OutputList.h"
 #include "RxQInfo.h"
 #include "FxQBuildInfo.h"
 
@@ -140,6 +143,40 @@ void sendCapabilityResponse()
     else
     {
         Serial.println("Capability response queue full");
+    }
+}
+
+// Built once in setup() (see initOutputList()) and sent as-is whenever
+// TX asks - see OUTPUT_LIST_REQUEST handling in loop().
+StageLink::OutputList localOutputList;
+
+// One descriptor per actual output *instance*, not per OutputManager
+// channel registration - e.g. the LED strip has 4 channels (brightness/
+// R/G/B) feeding one physical LedAddressable output, so it's still just
+// one descriptor here, index 0. This mirrors initDeviceInfo()'s
+// capability bitmask: both are built from what main.cpp actually
+// instantiated and registered, not introspected from OutputManager
+// (which only tracks channel->device bindings, not "how many distinct
+// physical devices" - that distinction lives here in application code).
+void initOutputList()
+{
+    StageLink::clearOutputList(localOutputList);
+    StageLink::addOutputDescriptor(localOutputList, StageLink::DeviceCapability::Motion, 0);
+    StageLink::addOutputDescriptor(localOutputList, StageLink::DeviceCapability::LedAddressable, 0);
+}
+
+void sendOutputListResponse()
+{
+    uint8_t payload[StageLink::MAX_OUTPUT_LIST_PAYLOAD_SIZE];
+    uint8_t length = StageLink::serializeOutputList(localOutputList, payload);
+
+    if (radio.send(StageLink::PacketType::OUTPUT_LIST_RESPONSE, payload, length))
+    {
+        Serial.println("Sent output list response");
+    }
+    else
+    {
+        Serial.println("Output list response queue full");
     }
 }
 
@@ -289,6 +326,7 @@ void setup()
     outputManager.registerDevice(OUTPUT_CHANNEL_LED_BLUE, &ledBlueProxy);
 
     initDeviceInfo();
+    initOutputList();
 
     displayReady = Display::begin();
     if (!displayReady)
@@ -365,6 +403,11 @@ void loop()
         {
             Serial.println("Capability request received");
             sendCapabilityResponse();
+        }
+        else if (packet.type == StageLink::PacketType::OUTPUT_LIST_REQUEST)
+        {
+            Serial.println("Output list request received");
+            sendOutputListResponse();
         }
         // VALUE_UPDATE is the live path: applied immediately as TX's input
         // changes. STATE_SNAPSHOT (below) only fires on reconnect.
