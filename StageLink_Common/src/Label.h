@@ -23,7 +23,7 @@ namespace StageLink
     // default character for untouched positions - see LabelEditor::begin),
     // then A-Z, 0-9, and the three punctuation characters, in that exact
     // order per the label spec. Uppercase only - no lowercase letters.
-    constexpr char LABEL_CHARSET[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789*_.";
+    constexpr char LABEL_CHARSET[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.";
     constexpr uint8_t LABEL_CHARSET_LENGTH = sizeof(LABEL_CHARSET) - 1; // exclude the string's own null terminator
 
     constexpr char LABEL_DEFAULT[LABEL_BUFFER_SIZE] = "LABEL";
