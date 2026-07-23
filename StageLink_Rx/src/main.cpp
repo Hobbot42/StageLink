@@ -38,6 +38,7 @@
 #include "StateSnapshot.h"
 #include "ConfigManager.h"
 #include "OutputManager.h"
+#include "EffectEngine.h"
 #include "LEDOutput.h"
 #include "DeviceInfo.h"
 #include "OutputList.h"
@@ -60,9 +61,10 @@ enum class RxPage : uint8_t
 {
     Status = 0,
     Diagnostics = 1,
-    UnitName = 2
+    UnitName = 2,
+    EffectTest = 3
 };
-constexpr uint8_t RX_PAGE_COUNT = 3;
+constexpr uint8_t RX_PAGE_COUNT = 4;
 constexpr unsigned long DISPLAY_REFRESH_INTERVAL_MS = 250;
 
 // Holding the local button this long on the Unit Name page starts
@@ -129,11 +131,28 @@ LinkState linkState = LinkState::WaitingForLink;
 StageLink::StatusPageCycler pageCycler;
 StageLink::ReliableRadio radio;
 StageLink::OutputManager outputManager;
+StageLink::EffectEngine effectEngine;
 ServoOutput servoOutputDevice(SERVO_PIN);
 LEDOutput ledOutputDevice;
 LEDChannelProxy ledRedProxy(ledOutputDevice, LEDChannelProxy::Channel::Red);
 LEDChannelProxy ledGreenProxy(ledOutputDevice, LEDChannelProxy::Channel::Green);
 LEDChannelProxy ledBlueProxy(ledOutputDevice, LEDChannelProxy::Channel::Blue);
+
+// Hardcoded proof-of-concept effect only - see EffectEngine.h for what's
+// deliberately not built yet (saved/multiple effects, triggers, timers,
+// wireless RUN_EFFECT, TxQ editing). Exercises two real output devices
+// (LED, servo) through OutputManager exactly like any other channel
+// update, to prove the playback engine actually drives hardware and not
+// just internal state. Triggered via the existing Cue packet (RX main
+// loop()'s Cue handler) - reusing TX's existing physical cue button
+// rather than adding any new trigger mechanism.
+void buildTestEffect(StageLink::Effect &effect)
+{
+    StageLink::clearEffect(effect);
+    StageLink::addEffectStep(effect, OUTPUT_CHANNEL_LED_BRIGHTNESS, 255, 500);
+    StageLink::addEffectStep(effect, OUTPUT_CHANNEL_SERVO, 90, 1000);
+    StageLink::addEffectStep(effect, OUTPUT_CHANNEL_LED_BRIGHTNESS, 0, 0);
+}
 
 // Built once in setup() (see initDeviceInfo()) and sent as-is whenever
 // TX asks - see CAPABILITY_REQUEST handling in loop().
@@ -394,9 +413,13 @@ void showCurrentPage()
             localDeviceInfo.deviceId
         );
     }
-    else
+    else if (pageCycler.page() == static_cast<uint8_t>(RxPage::UnitName))
     {
         Display::showUnitName(localDeviceInfo.unitName);
+    }
+    else
+    {
+        Display::showEffectTest(effectEngine.isRunning());
     }
 }
 
@@ -472,6 +495,11 @@ void setup()
     outputManager.registerDevice(OUTPUT_CHANNEL_LED_GREEN, &ledGreenProxy);
     outputManager.registerDevice(OUTPUT_CHANNEL_LED_BLUE, &ledBlueProxy);
 
+    effectEngine.begin(outputManager);
+    StageLink::Effect testEffect;
+    buildTestEffect(testEffect);
+    effectEngine.loadEffect(testEffect);
+
     initDeviceInfo();
     initOutputList();
 
@@ -506,6 +534,7 @@ void loop()
     radio.update();
     Encoder::update();
     ledOutputDevice.tick();
+    effectEngine.update();
 
     // Local encoder button: short press cycles RX's own OLED page; a long
     // press specifically on the Unit Name page starts editing it instead
@@ -603,6 +632,12 @@ void loop()
             Serial.print("Cue 1 received, sequence: ");
             Serial.println(packet.sequence);
             cueFlashUntil = millis() + 100;
+
+            // Reuses the existing cue trigger to demonstrate the effect
+            // engine on real hardware - no new packet or trigger
+            // mechanism, see buildTestEffect().
+            effectEngine.startEffect();
+            showCurrentPage();
         }
         else if (packet.type == StageLink::PacketType::CAPABILITY_REQUEST)
         {

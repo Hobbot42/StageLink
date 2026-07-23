@@ -235,3 +235,27 @@ void Display::showUnitNameEdit(char char0, char char1, uint8_t editingCharIndex)
 
     display.display();
 }
+
+void Display::showEffectTest(bool running)
+{
+    display.clearDisplay();
+
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    printIdentityLine();
+    display.println("Effect Test");
+    display.println();
+
+    if (running)
+    {
+        display.println("Running:");
+        display.println("Effect 1");
+    }
+    else
+    {
+        display.println("No Effect");
+    }
+
+    display.display();
+}

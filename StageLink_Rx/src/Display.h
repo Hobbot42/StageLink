@@ -58,4 +58,8 @@ public:
     // yet), editingCharIndex (0 or 1) is which one rotating the encoder
     // currently changes - see RX main.cpp's UnitEditState.
     static void showUnitNameEdit(char char0, char char1, uint8_t editingCharIndex);
+
+    // Proof-of-concept page for EffectEngine (see EffectEngine.h) -
+    // shows whether the hardcoded test effect is currently playing.
+    static void showEffectTest(bool running);
 };
