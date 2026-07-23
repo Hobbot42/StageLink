@@ -59,7 +59,10 @@ public:
     // currently changes - see RX main.cpp's UnitEditState.
     static void showUnitNameEdit(char char0, char char1, uint8_t editingCharIndex);
 
-    // Proof-of-concept page for EffectEngine (see EffectEngine.h) -
-    // shows whether the hardcoded test effect is currently playing.
-    static void showEffectTest(bool running);
+    // Proof-of-concept page for EffectEngine/EffectStorage - shows
+    // whether the test effect is currently playing, and whether it came
+    // from a previous save (storedAtBoot) or had to be generated fresh
+    // because nothing was saved yet (see RX main.cpp's
+    // effectLoadedFromStorage, set once at boot).
+    static void showEffectTest(bool running, bool storedAtBoot);
 };

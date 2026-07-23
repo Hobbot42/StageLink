@@ -39,6 +39,7 @@
 #include "ConfigManager.h"
 #include "OutputManager.h"
 #include "EffectEngine.h"
+#include "EffectStorage.h"
 #include "LEDOutput.h"
 #include "DeviceInfo.h"
 #include "OutputList.h"
@@ -96,6 +97,11 @@ constexpr uint8_t OUTPUT_CHANNEL_LED_RED = 3;
 constexpr uint8_t OUTPUT_CHANNEL_LED_GREEN = 4;
 constexpr uint8_t OUTPUT_CHANNEL_LED_BLUE = 5;
 
+// EffectStorage slot for the one effect this phase deals with - see
+// buildTestEffect()/setup(). Internal (0-based, EffectStorage's own
+// indexing) - the OLED page below labels it "Effect 1" for the operator.
+constexpr uint8_t TEST_EFFECT_ID = 0;
+
 unsigned long cueFlashUntil = 0;
 unsigned long lastDisplayRefresh = 0;
 unsigned long lastOutputRefresh = 0;
@@ -124,6 +130,11 @@ int encoderValue = 0;
 int servoAngle = 0;
 bool encoderButtonPressed = false;
 bool displayReady = false;
+// Set once in setup() - whether the test effect came from EffectStorage
+// (a previous save survived reset/power cycle) or had to be generated
+// fresh from buildTestEffect() because nothing was stored yet. Purely
+// informational, for the Effect Test OLED page (see showCurrentPage()).
+bool effectLoadedFromStorage = false;
 // True once any packet has ever arrived - distinguishes "never connected"
 // from "was connected, link since dropped" for LinkState/display purposes.
 bool hasReceivedValidPacket = false;
@@ -138,14 +149,15 @@ LEDChannelProxy ledRedProxy(ledOutputDevice, LEDChannelProxy::Channel::Red);
 LEDChannelProxy ledGreenProxy(ledOutputDevice, LEDChannelProxy::Channel::Green);
 LEDChannelProxy ledBlueProxy(ledOutputDevice, LEDChannelProxy::Channel::Blue);
 
-// Hardcoded proof-of-concept effect only - see EffectEngine.h for what's
-// deliberately not built yet (saved/multiple effects, triggers, timers,
-// wireless RUN_EFFECT, TxQ editing). Exercises two real output devices
-// (LED, servo) through OutputManager exactly like any other channel
-// update, to prove the playback engine actually drives hardware and not
-// just internal state. Triggered via the existing Cue packet (RX main
-// loop()'s Cue handler) - reusing TX's existing physical cue button
-// rather than adding any new trigger mechanism.
+// Default content for TEST_EFFECT_ID, used only the first time RX ever
+// boots with nothing saved under it yet (see setup()) - once saved via
+// EffectStorage, the persisted copy is what actually loads on every
+// later boot, this function doesn't run again. Exercises two real
+// output devices (LED, servo) through OutputManager exactly like any
+// other channel update, to prove the playback engine actually drives
+// hardware and not just internal state. Triggered via the existing Cue
+// packet (RX main loop()'s Cue handler) - reusing TX's existing
+// physical cue button rather than adding any new trigger mechanism.
 void buildTestEffect(StageLink::Effect &effect)
 {
     StageLink::clearEffect(effect);
@@ -419,7 +431,7 @@ void showCurrentPage()
     }
     else
     {
-        Display::showEffectTest(effectEngine.isRunning());
+        Display::showEffectTest(effectEngine.isRunning(), effectLoadedFromStorage);
     }
 }
 
@@ -496,8 +508,17 @@ void setup()
     outputManager.registerDevice(OUTPUT_CHANNEL_LED_BLUE, &ledBlueProxy);
 
     effectEngine.begin(outputManager);
+    StageLink::EffectStorage::begin();
+
     StageLink::Effect testEffect;
-    buildTestEffect(testEffect);
+    effectLoadedFromStorage = StageLink::EffectStorage::loadEffect(TEST_EFFECT_ID, testEffect);
+
+    if (!effectLoadedFromStorage)
+    {
+        buildTestEffect(testEffect);
+        StageLink::EffectStorage::saveEffect(TEST_EFFECT_ID, testEffect);
+    }
+
     effectEngine.loadEffect(testEffect);
 
     initDeviceInfo();

@@ -236,7 +236,7 @@ void Display::showUnitNameEdit(char char0, char char1, uint8_t editingCharIndex)
     display.display();
 }
 
-void Display::showEffectTest(bool running)
+void Display::showEffectTest(bool running, bool storedAtBoot)
 {
     display.clearDisplay();
 
@@ -247,15 +247,11 @@ void Display::showEffectTest(bool running)
     display.println("Effect Test");
     display.println();
 
-    if (running)
-    {
-        display.println("Running:");
-        display.println("Effect 1");
-    }
-    else
-    {
-        display.println("No Effect");
-    }
+    display.println("Effect 1");
+    display.println(storedAtBoot ? "Stored OK" : "Default Loaded");
+    display.println();
+
+    display.println(running ? "Running" : "No Effect");
 
     display.display();
 }
