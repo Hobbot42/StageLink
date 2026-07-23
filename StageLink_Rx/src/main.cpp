@@ -40,6 +40,7 @@
 #include "OutputManager.h"
 #include "EffectEngine.h"
 #include "EffectStorage.h"
+#include "TriggerManager.h"
 #include "LEDOutput.h"
 #include "DeviceInfo.h"
 #include "OutputList.h"
@@ -63,15 +64,18 @@ enum class RxPage : uint8_t
     Status = 0,
     Diagnostics = 1,
     UnitName = 2,
-    EffectTest = 3
+    EffectTest = 3,
+    TriggerStatus = 4
 };
-constexpr uint8_t RX_PAGE_COUNT = 4;
+constexpr uint8_t RX_PAGE_COUNT = 5;
 constexpr unsigned long DISPLAY_REFRESH_INTERVAL_MS = 250;
 
-// Holding the local button this long on the Unit Name page starts
-// editing instead of cycling to the next page - same threshold/pattern
-// TX uses for its own short-press/long-press split (see TX main.cpp).
-constexpr unsigned long UNIT_NAME_EDIT_HOLD_MS = 600;
+// Holding the local button this long fires a page-specific action
+// instead of cycling to the next page: on the Unit Name page, starts
+// editing it; on the Effect Test page, fires TRIGGER_LOCAL_BUTTON_1 (see
+// loop()). Same threshold/pattern TX uses for its own short-press/
+// long-press split (see TX main.cpp).
+constexpr unsigned long LOCAL_BUTTON_HOLD_MS = 600;
 
 // Periodic hardware-state recovery, not part of the update path - see
 // OutputManager::refreshAll()/OutputDevice::refreshState(). Reapplies
@@ -135,6 +139,11 @@ bool displayReady = false;
 // fresh from buildTestEffect() because nothing was stored yet. Purely
 // informational, for the Effect Test OLED page (see showCurrentPage()).
 bool effectLoadedFromStorage = false;
+// Updated by fireTrigger() whenever a trigger actually fires - purely
+// informational, for the Trigger Status OLED page. "None"/0 until the
+// first trigger fires after boot.
+const char *lastTriggerLabel = "None";
+int lastTriggerEffectNumber = 0;
 // True once any packet has ever arrived - distinguishes "never connected"
 // from "was connected, link since dropped" for LinkState/display purposes.
 bool hasReceivedValidPacket = false;
@@ -143,6 +152,7 @@ StageLink::StatusPageCycler pageCycler;
 StageLink::ReliableRadio radio;
 StageLink::OutputManager outputManager;
 StageLink::EffectEngine effectEngine;
+StageLink::TriggerManager triggerManager;
 ServoOutput servoOutputDevice(SERVO_PIN);
 LEDOutput ledOutputDevice;
 LEDChannelProxy ledRedProxy(ledOutputDevice, LEDChannelProxy::Channel::Red);
@@ -164,6 +174,24 @@ void buildTestEffect(StageLink::Effect &effect)
     StageLink::addEffectStep(effect, OUTPUT_CHANNEL_LED_BRIGHTNESS, 255, 500);
     StageLink::addEffectStep(effect, OUTPUT_CHANNEL_SERVO, 90, 1000);
     StageLink::addEffectStep(effect, OUTPUT_CHANNEL_LED_BRIGHTNESS, 0, 0);
+}
+
+// Fires triggerID through triggerManager and records it for the Trigger
+// Status OLED page - the single call site both the Cue handler and the
+// Effect Test page's local-button hold go through, so "what/when did a
+// trigger last fire" stays in one place. Caller is still responsible
+// for showCurrentPage() afterward if the display should reflect it now
+// rather than at the next periodic refresh.
+void fireTrigger(const char *label, uint8_t triggerID)
+{
+    triggerManager.trigger(triggerID);
+
+    lastTriggerLabel = label;
+
+    uint8_t assignedEffectID = triggerManager.getAssignedEffect(triggerID);
+    lastTriggerEffectNumber = (assignedEffectID == StageLink::TriggerManager::NO_EFFECT_ASSIGNED)
+        ? 0
+        : (assignedEffectID + 1);
 }
 
 // Built once in setup() (see initDeviceInfo()) and sent as-is whenever
@@ -429,9 +457,13 @@ void showCurrentPage()
     {
         Display::showUnitName(localDeviceInfo.unitName);
     }
-    else
+    else if (pageCycler.page() == static_cast<uint8_t>(RxPage::EffectTest))
     {
         Display::showEffectTest(effectEngine.isRunning(), effectLoadedFromStorage);
+    }
+    else
+    {
+        Display::showTriggerStatus(lastTriggerLabel, lastTriggerEffectNumber);
     }
 }
 
@@ -521,6 +553,14 @@ void setup()
 
     effectEngine.loadEffect(testEffect);
 
+    // Hardcoded default assignments for this first version (see
+    // TriggerManager.h) - both existing trigger sources point at the
+    // one effect that exists so far. A future version can persist/edit
+    // these via ConfigManager without changing TriggerManager's API.
+    triggerManager.begin(effectEngine);
+    triggerManager.assignTrigger(StageLink::TRIGGER_CUE_BUTTON, TEST_EFFECT_ID);
+    triggerManager.assignTrigger(StageLink::TRIGGER_LOCAL_BUTTON_1, TEST_EFFECT_ID);
+
     initDeviceInfo();
     initOutputList();
 
@@ -557,17 +597,19 @@ void loop()
     ledOutputDevice.tick();
     effectEngine.update();
 
-    // Local encoder button: short press cycles RX's own OLED page; a long
-    // press specifically on the Unit Name page starts editing it instead
-    // (see UNIT_NAME_EDIT_HOLD_MS) - fires the moment the hold threshold
-    // elapses, while the button is still down, rather than waiting for
-    // release, so the display switches to the edit view as immediate
-    // feedback that the hold registered. While editing, every press
-    // confirms the current character and advances rather than cycling
-    // pages - see confirmUnitNameEditChar(). This is purely local UI
-    // navigation, distinct from encoderButtonPressed (TX's remote
-    // encoder button state, received over radio and unaffected by any
-    // of this).
+    // Local encoder button: short press cycles RX's own OLED page on
+    // every page, unconditionally - a long press only does something
+    // different on two specific pages (see LOCAL_BUTTON_HOLD_MS below):
+    // Unit Name starts editing it, Effect Test fires
+    // TRIGGER_LOCAL_BUTTON_1. Either way the hold action fires the
+    // moment the hold threshold elapses, while the button is still down,
+    // rather than waiting for release, so the display updates as
+    // immediate feedback that the hold registered. While editing a unit
+    // name, every press instead confirms the current character and
+    // advances rather than cycling pages - see confirmUnitNameEditChar().
+    // This is purely local UI navigation, distinct from
+    // encoderButtonPressed (TX's remote encoder button state, received
+    // over radio and unaffected by any of this).
     //
     // The state-change edge is consumed first, so a fresh press always
     // resets localButtonPressStartTime before the hold check below ever
@@ -603,12 +645,20 @@ void loop()
     if (unitEditState == UnitEditState::None &&
         !localButtonHoldTriggered &&
         Encoder::isButtonPressed() &&
-        pageCycler.page() == static_cast<uint8_t>(RxPage::UnitName) &&
-        millis() - localButtonPressStartTime >= UNIT_NAME_EDIT_HOLD_MS)
+        millis() - localButtonPressStartTime >= LOCAL_BUTTON_HOLD_MS)
     {
-        beginUnitNameEdit();
-        showCurrentPage();
-        localButtonHoldTriggered = true;
+        if (pageCycler.page() == static_cast<uint8_t>(RxPage::UnitName))
+        {
+            beginUnitNameEdit();
+            showCurrentPage();
+            localButtonHoldTriggered = true;
+        }
+        else if (pageCycler.page() == static_cast<uint8_t>(RxPage::EffectTest))
+        {
+            fireTrigger("Local Button", StageLink::TRIGGER_LOCAL_BUTTON_1);
+            showCurrentPage();
+            localButtonHoldTriggered = true;
+        }
     }
 
     if (unitEditState != UnitEditState::None)
@@ -654,10 +704,12 @@ void loop()
             Serial.println(packet.sequence);
             cueFlashUntil = millis() + 100;
 
-            // Reuses the existing cue trigger to demonstrate the effect
-            // engine on real hardware - no new packet or trigger
-            // mechanism, see buildTestEffect().
-            effectEngine.startEffect();
+            // Routed through TriggerManager rather than calling
+            // effectEngine.startEffect() directly - behavior is
+            // identical today (TRIGGER_CUE_BUTTON is assigned to the
+            // one effect that exists, see setup()) but this is now the
+            // same path any future trigger source goes through.
+            fireTrigger("Cue", StageLink::TRIGGER_CUE_BUTTON);
             showCurrentPage();
         }
         else if (packet.type == StageLink::PacketType::CAPABILITY_REQUEST)

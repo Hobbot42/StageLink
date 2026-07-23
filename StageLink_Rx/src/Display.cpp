@@ -255,3 +255,31 @@ void Display::showEffectTest(bool running, bool storedAtBoot)
 
     display.display();
 }
+
+void Display::showTriggerStatus(const char *lastTriggerLabel, int effectNumber)
+{
+    display.clearDisplay();
+
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    printIdentityLine();
+    display.println("Trigger");
+    display.println();
+
+    display.println("Last:");
+    display.println(lastTriggerLabel);
+    display.println();
+
+    display.println("Effect:");
+    if (effectNumber > 0)
+    {
+        display.println(effectNumber);
+    }
+    else
+    {
+        display.println("-");
+    }
+
+    display.display();
+}

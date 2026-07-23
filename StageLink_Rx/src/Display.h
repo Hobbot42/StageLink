@@ -65,4 +65,10 @@ public:
     // because nothing was saved yet (see RX main.cpp's
     // effectLoadedFromStorage, set once at boot).
     static void showEffectTest(bool running, bool storedAtBoot);
+
+    // Shows the most recent trigger source (e.g. "Cue", "Local Button")
+    // and the effect number assigned to it - see RX main.cpp's
+    // fireTrigger()/TriggerManager.h. effectNumber is 1-based to match
+    // "Effect 1" elsewhere; 0 means no trigger has fired since boot.
+    static void showTriggerStatus(const char *lastTriggerLabel, int effectNumber);
 };
