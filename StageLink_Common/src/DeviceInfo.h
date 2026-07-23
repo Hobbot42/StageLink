@@ -68,9 +68,33 @@ namespace StageLink
     constexpr uint8_t DEVICE_VERSION_MAX_LENGTH = 12;
     constexpr uint8_t DEVICE_HW_VERSION_MAX_LENGTH = 4; // placeholder for now
 
+    // ESP32 hardware (Wi-Fi station) MAC address, 6 bytes - permanent,
+    // factory-assigned, and unique per board, so it's used as-is rather
+    // than a manually assigned number. Raw bytes on the wire, not a
+    // string - see formatDeviceIdShort() below for a human-readable form.
+    constexpr uint8_t DEVICE_ID_LENGTH = 6;
+
+    // User-assigned short label (e.g. "A1", "B2") for telling apart
+    // multiple RxQ units in one setup - unlike deviceId, this is not
+    // guaranteed unique, just operator-chosen. 2 characters, A-Z/0-9
+    // only (see UNIT_NAME_CHARSET/isValidUnitNameChar) - persisted on RX
+    // via ConfigManager (see RX main.cpp), defaults to UNIT_NAME_DEFAULT
+    // until an operator sets it.
+    constexpr uint8_t UNIT_NAME_LENGTH = 3; // 2 chars + null terminator
+    constexpr char UNIT_NAME_DEFAULT[UNIT_NAME_LENGTH] = "A1";
+    constexpr char UNIT_NAME_CHARSET[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    constexpr uint8_t UNIT_NAME_CHARSET_LENGTH = sizeof(UNIT_NAME_CHARSET) - 1; // exclude the string's own null terminator
+
+    inline bool isValidUnitNameChar(char c)
+    {
+        return (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+    }
+
     struct DeviceInfo
     {
         char name[DEVICE_NAME_MAX_LENGTH];
+        uint8_t deviceId[DEVICE_ID_LENGTH];
+        char unitName[UNIT_NAME_LENGTH];
         char firmwareVersion[DEVICE_VERSION_MAX_LENGTH];
         char hardwareVersion[DEVICE_HW_VERSION_MAX_LENGTH];
         CapabilityMask capabilities;
@@ -78,6 +102,8 @@ namespace StageLink
 
     constexpr uint8_t DEVICE_INFO_WIRE_SIZE =
         DEVICE_NAME_MAX_LENGTH +
+        DEVICE_ID_LENGTH +
+        UNIT_NAME_LENGTH +
         DEVICE_VERSION_MAX_LENGTH +
         DEVICE_HW_VERSION_MAX_LENGTH +
         sizeof(CapabilityMask);
@@ -91,6 +117,12 @@ namespace StageLink
 
         memcpy(payload + offset, info.name, DEVICE_NAME_MAX_LENGTH);
         offset += DEVICE_NAME_MAX_LENGTH;
+
+        memcpy(payload + offset, info.deviceId, DEVICE_ID_LENGTH);
+        offset += DEVICE_ID_LENGTH;
+
+        memcpy(payload + offset, info.unitName, UNIT_NAME_LENGTH);
+        offset += UNIT_NAME_LENGTH;
 
         memcpy(payload + offset, info.firmwareVersion, DEVICE_VERSION_MAX_LENGTH);
         offset += DEVICE_VERSION_MAX_LENGTH;
@@ -121,6 +153,13 @@ namespace StageLink
         outInfo.name[DEVICE_NAME_MAX_LENGTH - 1] = '\0';
         offset += DEVICE_NAME_MAX_LENGTH;
 
+        memcpy(outInfo.deviceId, payload + offset, DEVICE_ID_LENGTH);
+        offset += DEVICE_ID_LENGTH;
+
+        memcpy(outInfo.unitName, payload + offset, UNIT_NAME_LENGTH);
+        outInfo.unitName[UNIT_NAME_LENGTH - 1] = '\0';
+        offset += UNIT_NAME_LENGTH;
+
         memcpy(outInfo.firmwareVersion, payload + offset, DEVICE_VERSION_MAX_LENGTH);
         outInfo.firmwareVersion[DEVICE_VERSION_MAX_LENGTH - 1] = '\0';
         offset += DEVICE_VERSION_MAX_LENGTH;
@@ -134,6 +173,36 @@ namespace StageLink
             (static_cast<uint16_t>(static_cast<uint8_t>(payload[offset + 1])) << 8);
 
         return true;
+    }
+
+    constexpr uint8_t DEVICE_ID_SHORT_BYTES = 3; // last 3 bytes - enough to tell a handful of RxQ units apart on one show without printing the full 6-byte MAC
+    constexpr uint8_t DEVICE_ID_SHORT_STRING_LENGTH = DEVICE_ID_SHORT_BYTES * 2 + 1; // 2 hex chars/byte + null terminator
+
+    // Formats the last DEVICE_ID_SHORT_BYTES bytes of deviceId as
+    // uppercase hex into buffer (must be at least
+    // DEVICE_ID_SHORT_STRING_LENGTH). Display-only convenience (TX OLED,
+    // Serial logging) - the full 6-byte deviceId is what's actually
+    // unique and transmitted; this is just a human-readable short form.
+    inline void formatDeviceIdShort(const uint8_t deviceId[DEVICE_ID_LENGTH], char *buffer, uint8_t bufferSize)
+    {
+        static const char hexDigits[] = "0123456789ABCDEF";
+
+        if (bufferSize < DEVICE_ID_SHORT_STRING_LENGTH)
+        {
+            buffer[0] = '\0';
+            return;
+        }
+
+        uint8_t startByte = DEVICE_ID_LENGTH - DEVICE_ID_SHORT_BYTES;
+
+        for (uint8_t i = 0; i < DEVICE_ID_SHORT_BYTES; ++i)
+        {
+            uint8_t value = deviceId[startByte + i];
+            buffer[i * 2] = hexDigits[(value >> 4) & 0x0F];
+            buffer[i * 2 + 1] = hexDigits[value & 0x0F];
+        }
+
+        buffer[DEVICE_ID_SHORT_BYTES * 2] = '\0';
     }
 
     // Copies src into a fixed-size DeviceInfo field, always null-

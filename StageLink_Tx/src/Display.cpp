@@ -180,7 +180,14 @@ void Display::showDeviceInfo(const RemoteDevice &remote)
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 0);
-    printIdentityLine();
+
+    // This page identifies itself rather than using printIdentityLine()
+    // like the other pages - RX's info is the whole point of this page,
+    // and the build/version identity is only a few button-presses away
+    // on the Status page, so it isn't worth the line budget here (see
+    // the row-count comment below).
+    display.println("REMOTE DEVICE");
+    display.println();
 
     // Three states, matching how far discovery has actually gotten -
     // see RemoteDevice.h. Nothing here is stored separately from
@@ -195,42 +202,52 @@ void Display::showDeviceInfo(const RemoteDevice &remote)
     if (!remote.hasDeviceInfo || !remote.hasOutputList)
     {
         display.println("RX: Connected");
-        display.println("Device: Waiting");
+        display.println("Waiting...");
         display.display();
         return;
     }
 
-    display.print("RX: ");
+    display.print("Unit: ");
+    display.println(remote.info.unitName);
+
     display.println(remote.info.name);
+
+    char idBuffer[StageLink::DEVICE_ID_SHORT_STRING_LENGTH];
+    StageLink::formatDeviceIdShort(remote.info.deviceId, idBuffer, sizeof(idBuffer));
+    display.print("ID: ");
+    display.println(idBuffer);
 
     display.print("FW: ");
     display.println(remote.info.firmwareVersion);
 
-    display.println("Outputs:");
-
-    // Show what fits and say how many more there are rather than
-    // scrolling - see RemoteDevice.h/OutputList.h for why the count can
-    // exceed what a 128x64 OLED can list one-per-line alongside the
-    // other lines on this page.
-    constexpr uint8_t MAX_DISPLAYED_OUTPUTS = 3;
+    // This 128x64 OLED at text size 1 fits 8 rows. Title/blank/Unit/name/
+    // ID/FW/header already use 7 (no second blank line - see the earlier
+    // ID-line comment history), leaving only 1 for individual output
+    // lines now that Unit took the last spare row. When there are more
+    // outputs than that, the header shows the total count instead of
+    // adding a "+N more" row - there isn't room for both, and the spec
+    // calls for showing the count rather than scrolling.
+    constexpr uint8_t MAX_DISPLAYED_OUTPUTS = 1;
     uint8_t shown = remote.outputs.count < MAX_DISPLAYED_OUTPUTS
         ? remote.outputs.count
         : MAX_DISPLAYED_OUTPUTS;
 
+    if (remote.outputs.count > MAX_DISPLAYED_OUTPUTS)
+    {
+        display.print("Outputs: ");
+        display.println(remote.outputs.count);
+    }
+    else
+    {
+        display.println("Outputs:");
+    }
+
     for (uint8_t i = 0; i < shown; ++i)
     {
         const StageLink::OutputDescriptor &descriptor = remote.outputs.outputs[i];
-        display.print("  ");
         display.print(StageLink::capabilityName(descriptor.capability));
         display.print(" #");
         display.println(descriptor.index);
-    }
-
-    if (remote.outputs.count > shown)
-    {
-        display.print("  +");
-        display.print(remote.outputs.count - shown);
-        display.println(" more");
     }
 
     display.display();

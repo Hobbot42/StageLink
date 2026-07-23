@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cstdint>
+#include "DeviceInfo.h"
 
 class Display
 {
@@ -37,11 +38,24 @@ public:
         int servoAngle
     );
 
+    // deviceId is RX's own identity (see localDeviceInfo in main.cpp) -
+    // passed through rather than read from a second copy, same source
+    // used for the Serial startup banner and TX's OLED.
     static void showDiagnostics(
         const char *linkState,
         bool rssiAvailable,
         int8_t rssi,
         uint32_t packetCount,
-        uint32_t retryErrorCount
+        uint32_t retryErrorCount,
+        const uint8_t deviceId[StageLink::DEVICE_ID_LENGTH]
     );
+
+    // Normal (non-editing) view of the unit name page - see
+    // showUnitNameEdit() for the in-progress editing view.
+    static void showUnitName(const char *unitName);
+
+    // char0/char1 are the in-progress edit buffer (may not be saved
+    // yet), editingCharIndex (0 or 1) is which one rotating the encoder
+    // currently changes - see RX main.cpp's UnitEditState.
+    static void showUnitNameEdit(char char0, char char1, uint8_t editingCharIndex);
 };

@@ -151,7 +151,8 @@ void Display::showDiagnostics(
     bool rssiAvailable,
     int8_t rssi,
     uint32_t packetCount,
-    uint32_t retryErrorCount
+    uint32_t retryErrorCount,
+    const uint8_t deviceId[StageLink::DEVICE_ID_LENGTH]
 )
 {
     display.clearDisplay();
@@ -161,6 +162,11 @@ void Display::showDiagnostics(
     display.setCursor(0, 0);
     printIdentityLine();
     display.println("Diagnostics");
+
+    char idBuffer[StageLink::DEVICE_ID_SHORT_STRING_LENGTH];
+    StageLink::formatDeviceIdShort(deviceId, idBuffer, sizeof(idBuffer));
+    display.print("ID: ");
+    display.println(idBuffer);
 
     display.print("Link: ");
     display.println(linkState);
@@ -181,6 +187,51 @@ void Display::showDiagnostics(
 
     display.print("Retry/Err: ");
     display.println(retryErrorCount);
+
+    display.display();
+}
+
+void Display::showUnitName(const char *unitName)
+{
+    display.clearDisplay();
+
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    printIdentityLine();
+    display.println("Unit Name");
+    display.println();
+
+    display.setTextSize(2);
+    display.println(unitName);
+
+    display.setTextSize(1);
+    display.println();
+    display.println("Hold to edit");
+
+    display.display();
+}
+
+void Display::showUnitNameEdit(char char0, char char1, uint8_t editingCharIndex)
+{
+    display.clearDisplay();
+
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("Edit Unit Name");
+    display.println();
+
+    display.setTextSize(2);
+    display.print(char0);
+    display.println(char1);
+
+    display.setTextSize(1);
+    display.println();
+    display.print("Char ");
+    display.print(editingCharIndex + 1);
+    display.println(" of 2");
+    display.println("Press to confirm");
 
     display.display();
 }

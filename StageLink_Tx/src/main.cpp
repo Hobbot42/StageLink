@@ -128,6 +128,11 @@ constexpr ControlChannelConfig CONTROL_CHANNELS[CONTROL_MODE_COUNT] =
 unsigned long lastHeartbeatTime = 0;
 unsigned long lastDisplayRefresh = 0;
 unsigned long encoderButtonPressStartTime = 0;
+// True once the current hold has already fired the page-cycle action -
+// keeps the eventual release from also cycling the control mode, and
+// distinguishes "this release ended a hold that already acted" from "a
+// genuine short press, only resolvable at release."
+bool encoderHoldTriggered = false;
 bool buttonWasPressed = false;
 bool inputStateSnapshotNeeded = true;
 bool capabilityRequestNeeded = true;
@@ -517,14 +522,25 @@ void loop()
         showCurrentPage();
     }
 
-    // The encoder button has two jobs, distinguished by hold duration and
-    // only resolved on release (you can't know which it'll be while still
-    // held): a short press cycles which channel the encoder drives
-    // (Servo -> Red -> Green -> Blue -> Brightness -> Servo...), a hold
-    // past PAGE_CYCLE_HOLD_MS instead cycles the OLED page
-    // (Status -> Diagnostics -> Device Info -> Status...). Either way,
-    // BUTTON_EVENT still goes to RX on every press/release exactly as
-    // before - this only adds local dispatch on top of that.
+    // The encoder button has two jobs: a short press cycles which channel
+    // the encoder drives (Servo -> Red -> Green -> Blue -> Brightness ->
+    // Servo...), a hold past PAGE_CYCLE_HOLD_MS instead cycles the OLED
+    // page (Status -> Diagnostics -> Device Info -> Status...). The page
+    // cycle fires the moment the hold threshold elapses, while the
+    // button is still down, rather than waiting for release, so the
+    // display switches pages as immediate feedback that the hold
+    // registered; a short press can only be resolved at release, since
+    // there's no way to know it won't turn into a hold before then.
+    // BUTTON_EVENT still goes to RX on every press/release edge exactly
+    // as before, unaffected by any of this - only the local page/mode
+    // dispatch changed.
+    //
+    // The state-change edge is consumed first, so a fresh press always
+    // resets encoderButtonPressStartTime before the hold check below
+    // ever runs - checking hold duration first would (and did on RX,
+    // same bug) read the previous press's stale start time on the very
+    // iteration a new press begins, firing the hold action instantly on
+    // a short click.
     bool encoderButtonPressed;
     if (Encoder::consumeButtonStateChange(encoderButtonPressed))
     {
@@ -533,10 +549,13 @@ void loop()
         if (encoderButtonPressed)
         {
             encoderButtonPressStartTime = millis();
+            encoderHoldTriggered = false;
         }
-        else if (millis() - encoderButtonPressStartTime >= PAGE_CYCLE_HOLD_MS)
+        else if (encoderHoldTriggered)
         {
-            pageCycler.next();
+            // This release just ended the hold that already cycled the
+            // page below - nothing more to do for it.
+            encoderHoldTriggered = false;
         }
         else
         {
@@ -548,7 +567,20 @@ void loop()
             Serial.println(CONTROL_CHANNELS[static_cast<uint8_t>(currentMode)].label);
         }
 
+        // Refreshes on every press/release edge (not just mode changes)
+        // so the Status page's live "Button: PRESSED/RELEASED" line
+        // updates immediately rather than waiting for the next periodic
+        // refresh - unchanged from before this hold-timing change.
         showCurrentPage();
+    }
+
+    if (!encoderHoldTriggered &&
+        Encoder::isButtonPressed() &&
+        millis() - encoderButtonPressStartTime >= PAGE_CYCLE_HOLD_MS)
+    {
+        pageCycler.next();
+        showCurrentPage();
+        encoderHoldTriggered = true;
     }
 
     // Track delivery outcomes for our own sends. The only one we act on
