@@ -191,7 +191,7 @@ void Display::showDiagnostics(
     display.display();
 }
 
-void Display::showUnitName(const char *unitName)
+void Display::showUnitLabel(const char *unitLabel)
 {
     display.clearDisplay();
 
@@ -199,39 +199,46 @@ void Display::showUnitName(const char *unitName)
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 0);
     printIdentityLine();
-    display.println("Unit Name");
+    display.println("Unit Label");
     display.println();
 
-    display.setTextSize(2);
-    display.println(unitName);
+    // Text size 1 (not 2) since a label can be up to 12 characters -
+    // at size 2 (12px/char) that would run past the 128px-wide screen.
+    display.println(unitLabel);
 
-    display.setTextSize(1);
     display.println();
     display.println("Hold to edit");
 
     display.display();
 }
 
-void Display::showUnitNameEdit(char char0, char char1, uint8_t editingCharIndex)
+void Display::showUnitLabelEdit(const char *buffer, uint8_t cursor)
 {
     display.clearDisplay();
 
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 0);
-    display.println("Edit Unit Name");
+    display.println("Edit Unit Label");
     display.println();
 
-    display.setTextSize(2);
-    display.print(char0);
-    display.println(char1);
+    display.println(buffer);
 
-    display.setTextSize(1);
+    // Caret under the character the encoder currently edits - the font
+    // is monospace at a fixed size, so padding with spaces lines it up
+    // without measuring pixel widths.
+    for (uint8_t i = 0; i < cursor; ++i)
+    {
+        display.print(' ');
+    }
+    display.println('^');
+
     display.println();
     display.print("Char ");
-    display.print(editingCharIndex + 1);
-    display.println(" of 2");
-    display.println("Press to confirm");
+    display.print(cursor + 1);
+    display.print(" of ");
+    display.println(StageLink::LABEL_MAX_LENGTH);
+    display.println("Press=next Hold=back");
 
     display.display();
 }

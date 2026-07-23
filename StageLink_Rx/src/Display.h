@@ -50,14 +50,15 @@ public:
         const uint8_t deviceId[StageLink::DEVICE_ID_LENGTH]
     );
 
-    // Normal (non-editing) view of the unit name page - see
-    // showUnitNameEdit() for the in-progress editing view.
-    static void showUnitName(const char *unitName);
+    // Normal (non-editing) view of the unit label page - see
+    // showUnitLabelEdit() for the in-progress editing view.
+    static void showUnitLabel(const char *unitLabel);
 
-    // char0/char1 are the in-progress edit buffer (may not be saved
-    // yet), editingCharIndex (0 or 1) is which one rotating the encoder
-    // currently changes - see RX main.cpp's UnitEditState.
-    static void showUnitNameEdit(char char0, char char1, uint8_t editingCharIndex);
+    // buffer is the in-progress edit value (may not be saved yet, and is
+    // space-padded to StageLink::LABEL_MAX_LENGTH), cursor is which
+    // character rotating the encoder currently changes - see
+    // StageLink_Common/src/LabelEditor.h.
+    static void showUnitLabelEdit(const char *buffer, uint8_t cursor);
 
     // Proof-of-concept page for EffectEngine/EffectStorage - shows
     // whether the test effect is currently playing, and whether it came

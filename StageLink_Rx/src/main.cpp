@@ -43,6 +43,8 @@
 #include "TriggerManager.h"
 #include "LEDOutput.h"
 #include "DeviceInfo.h"
+#include "Label.h"
+#include "LabelEditor.h"
 #include "OutputList.h"
 #include "RxQInfo.h"
 #include "FxQBuildInfo.h"
@@ -63,7 +65,7 @@ enum class RxPage : uint8_t
 {
     Status = 0,
     Diagnostics = 1,
-    UnitName = 2,
+    UnitLabel = 2,
     EffectTest = 3,
     TriggerStatus = 4
 };
@@ -71,10 +73,13 @@ constexpr uint8_t RX_PAGE_COUNT = 5;
 constexpr unsigned long DISPLAY_REFRESH_INTERVAL_MS = 250;
 
 // Holding the local button this long fires a page-specific action
-// instead of cycling to the next page: on the Unit Name page, starts
+// instead of cycling to the next page: on the Unit Label page, starts
 // editing it; on the Effect Test page, fires TRIGGER_LOCAL_BUTTON_1 (see
 // loop()). Same threshold/pattern TX uses for its own short-press/
-// long-press split (see TX main.cpp).
+// long-press split (see TX main.cpp). While already editing the label,
+// the same hold instead steps back a character (see LabelEditor::back())
+// - reusing this one control for both jobs since RX's local encoder only
+// has a single button.
 constexpr unsigned long LOCAL_BUTTON_HOLD_MS = 600;
 
 // Periodic hardware-state recovery, not part of the update path - see
@@ -110,25 +115,20 @@ unsigned long cueFlashUntil = 0;
 unsigned long lastDisplayRefresh = 0;
 unsigned long lastOutputRefresh = 0;
 unsigned long localButtonPressStartTime = 0;
-// True once the current hold has already fired beginUnitNameEdit() -
+// True once the current hold has already fired an action (opening edit
+// mode, stepping back a character, or firing the effect test trigger) -
 // keeps the eventual release from double-triggering (see loop()) and
-// distinguishes "this release ended the hold that opened edit mode"
+// distinguishes "this release ended a hold that already did something"
 // from "this release is a normal confirm/cycle press."
 bool localButtonHoldTriggered = false;
 
-// Unit Name edit UI - see beginUnitNameEdit()/confirmUnitNameEditChar()/
-// stepUnitNameEditChar() below. unitEditBuffer holds the in-progress
-// value; it's only copied into localDeviceInfo.unitName (and persisted)
-// once both characters are confirmed, so a cancelled/interrupted edit
-// never corrupts the last saved name.
-enum class UnitEditState : uint8_t
-{
-    None,
-    EditingChar0,
-    EditingChar1
-};
-UnitEditState unitEditState = UnitEditState::None;
-char unitEditBuffer[StageLink::UNIT_NAME_LENGTH] = {'A', '1', '\0'};
+// Unit Label edit UI - see beginUnitLabelEdit()/commitUnitLabelEdit()
+// below. unitLabelEditor holds the in-progress value; it's only copied
+// into localDeviceInfo.unitLabel (and persisted) once every character
+// has been confirmed, so a cancelled/interrupted edit never corrupts the
+// last saved label. Generic across any future label type - see
+// StageLink_Common/src/LabelEditor.h.
+StageLink::LabelEditor unitLabelEditor;
 // TX's remote encoder position/button state, as last received over radio.
 int encoderValue = 0;
 int servoAngle = 0;
@@ -198,76 +198,65 @@ void fireTrigger(const char *label, uint8_t triggerID)
 // TX asks - see CAPABILITY_REQUEST handling in loop().
 StageLink::DeviceInfo localDeviceInfo;
 
-// Restores the persisted unit name into localDeviceInfo.unitName -
-// stored as two raw character codes (ConfigManager has no string type),
-// defaulting to UNIT_NAME_DEFAULT on a board that's never had one saved.
-void loadUnitName()
+// Restores the persisted unit label into localDeviceInfo.unitLabel -
+// stored as one raw character code per NVS key (ConfigManager has no
+// string type), defaulting to LABEL_DEFAULT on a board that's never had
+// one saved.
+void loadUnitLabel()
 {
-    char restored[StageLink::UNIT_NAME_LENGTH];
-    restored[0] = static_cast<char>(StageLink::ConfigManager::getUInt8(
-        "unitNameChar0", static_cast<uint8_t>(StageLink::UNIT_NAME_DEFAULT[0])));
-    restored[1] = static_cast<char>(StageLink::ConfigManager::getUInt8(
-        "unitNameChar1", static_cast<uint8_t>(StageLink::UNIT_NAME_DEFAULT[1])));
-    restored[2] = '\0';
+    char restored[StageLink::LABEL_BUFFER_SIZE];
 
-    StageLink::setDeviceInfoField(localDeviceInfo.unitName, StageLink::UNIT_NAME_LENGTH, restored);
-}
-
-void saveUnitName()
-{
-    StageLink::ConfigManager::putUInt8("unitNameChar0", static_cast<uint8_t>(localDeviceInfo.unitName[0]));
-    StageLink::ConfigManager::putUInt8("unitNameChar1", static_cast<uint8_t>(localDeviceInfo.unitName[1]));
-}
-
-uint8_t unitNameCharsetIndexOf(char c)
-{
-    const char *pos = strchr(StageLink::UNIT_NAME_CHARSET, c);
-    return pos != nullptr ? static_cast<uint8_t>(pos - StageLink::UNIT_NAME_CHARSET) : 0;
-}
-
-// Enters edit mode starting from the currently saved name, not a blank
-// slate - rotating from "where it already is" rather than resetting to
-// 'A' every time.
-void beginUnitNameEdit()
-{
-    unitEditBuffer[0] = localDeviceInfo.unitName[0];
-    unitEditBuffer[1] = localDeviceInfo.unitName[1];
-    unitEditBuffer[2] = '\0';
-    unitEditState = UnitEditState::EditingChar0;
-
-    Serial.println("Unit name edit: character 1 of 2");
-}
-
-void stepUnitNameEditChar(int direction)
-{
-    uint8_t slot = unitEditState == UnitEditState::EditingChar0 ? 0 : 1;
-    uint8_t index = unitNameCharsetIndexOf(unitEditBuffer[slot]);
-
-    index = static_cast<uint8_t>(
-        (index + StageLink::UNIT_NAME_CHARSET_LENGTH + (direction > 0 ? 1 : -1)) %
-        StageLink::UNIT_NAME_CHARSET_LENGTH
-    );
-    unitEditBuffer[slot] = StageLink::UNIT_NAME_CHARSET[index];
-}
-
-// First press confirms character 1 and moves to character 2; second
-// press confirms character 2, commits the result to localDeviceInfo and
-// ConfigManager, and exits edit mode.
-void confirmUnitNameEditChar()
-{
-    if (unitEditState == UnitEditState::EditingChar0)
+    for (uint8_t i = 0; i < StageLink::LABEL_MAX_LENGTH; ++i)
     {
-        unitEditState = UnitEditState::EditingChar1;
-        Serial.println("Unit name edit: character 2 of 2");
-        return;
+        char key[16];
+        snprintf(key, sizeof(key), "unitLabelC%u", i);
+
+        uint8_t defaultValue = static_cast<uint8_t>(
+            i < strlen(StageLink::LABEL_DEFAULT) ? StageLink::LABEL_DEFAULT[i] : ' '
+        );
+        restored[i] = static_cast<char>(StageLink::ConfigManager::getUInt8(key, defaultValue));
     }
+    restored[StageLink::LABEL_MAX_LENGTH] = '\0';
+    StageLink::trimTrailingLabelSpaces(restored);
 
-    unitEditState = UnitEditState::None;
-    StageLink::setDeviceInfoField(localDeviceInfo.unitName, StageLink::UNIT_NAME_LENGTH, unitEditBuffer);
-    saveUnitName();
+    StageLink::setLabelText(localDeviceInfo.unitLabel, StageLink::LABEL_BUFFER_SIZE, restored);
+}
 
-    Serial.print("Unit name saved: ");
-    Serial.println(localDeviceInfo.unitName);
+void saveUnitLabel()
+{
+    for (uint8_t i = 0; i < StageLink::LABEL_MAX_LENGTH; ++i)
+    {
+        char key[16];
+        snprintf(key, sizeof(key), "unitLabelC%u", i);
+
+        char c = i < strlen(localDeviceInfo.unitLabel) ? localDeviceInfo.unitLabel[i] : ' ';
+        StageLink::ConfigManager::putUInt8(key, static_cast<uint8_t>(c));
+    }
+}
+
+// Enters edit mode starting from the currently saved label, not a blank
+// slate - rotating from "where it already is" rather than resetting to
+// blank every time.
+void beginUnitLabelEdit()
+{
+    unitLabelEditor.begin(localDeviceInfo.unitLabel);
+    Serial.println("Unit label edit: character 1");
+}
+
+// Called once unitLabelEditor.confirmChar() reports the last character
+// was just confirmed - commits the trimmed result to localDeviceInfo and
+// ConfigManager.
+void commitUnitLabelEdit()
+{
+    char committed[StageLink::LABEL_BUFFER_SIZE];
+    StageLink::setLabelText(committed, StageLink::LABEL_BUFFER_SIZE, unitLabelEditor.buffer());
+    StageLink::trimTrailingLabelSpaces(committed);
+
+    StageLink::setLabelText(localDeviceInfo.unitLabel, StageLink::LABEL_BUFFER_SIZE, committed);
+    saveUnitLabel();
+
+    Serial.print("Unit label saved: ");
+    Serial.println(localDeviceInfo.unitLabel);
 }
 
 void initDeviceInfo()
@@ -284,8 +273,8 @@ void initDeviceInfo()
     // require radio.begin() to have run first.
     WiFi.macAddress(localDeviceInfo.deviceId);
 
-    // User-assigned label, not factory identity - see loadUnitName().
-    loadUnitName();
+    // User-assigned label, not factory identity - see loadUnitLabel().
+    loadUnitLabel();
 
     StageLink::setDeviceInfoField(
         localDeviceInfo.firmwareVersion,
@@ -419,14 +408,10 @@ void showCurrentPage()
     }
 
     // Editing takes over the display regardless of which page is
-    // selected - see beginUnitNameEdit()/confirmUnitNameEditChar().
-    if (unitEditState != UnitEditState::None)
+    // selected - see beginUnitLabelEdit()/commitUnitLabelEdit().
+    if (unitLabelEditor.isActive())
     {
-        Display::showUnitNameEdit(
-            unitEditBuffer[0],
-            unitEditBuffer[1],
-            unitEditState == UnitEditState::EditingChar0 ? 0 : 1
-        );
+        Display::showUnitLabelEdit(unitLabelEditor.buffer(), unitLabelEditor.cursor());
         return;
     }
 
@@ -453,9 +438,9 @@ void showCurrentPage()
             localDeviceInfo.deviceId
         );
     }
-    else if (pageCycler.page() == static_cast<uint8_t>(RxPage::UnitName))
+    else if (pageCycler.page() == static_cast<uint8_t>(RxPage::UnitLabel))
     {
-        Display::showUnitName(localDeviceInfo.unitName);
+        Display::showUnitLabel(localDeviceInfo.unitLabel);
     }
     else if (pageCycler.page() == static_cast<uint8_t>(RxPage::EffectTest))
     {
@@ -600,16 +585,17 @@ void loop()
     // Local encoder button: short press cycles RX's own OLED page on
     // every page, unconditionally - a long press only does something
     // different on two specific pages (see LOCAL_BUTTON_HOLD_MS below):
-    // Unit Name starts editing it, Effect Test fires
+    // Unit Label starts editing it, Effect Test fires
     // TRIGGER_LOCAL_BUTTON_1. Either way the hold action fires the
     // moment the hold threshold elapses, while the button is still down,
     // rather than waiting for release, so the display updates as
     // immediate feedback that the hold registered. While editing a unit
-    // name, every press instead confirms the current character and
-    // advances rather than cycling pages - see confirmUnitNameEditChar().
-    // This is purely local UI navigation, distinct from
-    // encoderButtonPressed (TX's remote encoder button state, received
-    // over radio and unaffected by any of this).
+    // label, a short press instead confirms the current character and
+    // advances (see LabelEditor::confirmChar()), and a hold steps back to
+    // re-edit the previous character - or cancels the whole edit at the
+    // first character (see LabelEditor::back()). This is purely local UI
+    // navigation, distinct from encoderButtonPressed (TX's remote encoder
+    // button state, received over radio and unaffected by any of this).
     //
     // The state-change edge is consumed first, so a fresh press always
     // resets localButtonPressStartTime before the hold check below ever
@@ -626,13 +612,17 @@ void loop()
         }
         else if (localButtonHoldTriggered)
         {
-            // This release just ended the hold that already opened edit
-            // mode below - nothing more to do for it.
+            // This release just ended a hold that already did something
+            // (opened edit mode, stepped back a character, or fired the
+            // effect test trigger) - nothing more to do for it.
             localButtonHoldTriggered = false;
         }
-        else if (unitEditState != UnitEditState::None)
+        else if (unitLabelEditor.isActive())
         {
-            confirmUnitNameEditChar();
+            if (unitLabelEditor.confirmChar())
+            {
+                commitUnitLabelEdit();
+            }
             showCurrentPage();
         }
         else
@@ -642,14 +632,23 @@ void loop()
         }
     }
 
-    if (unitEditState == UnitEditState::None &&
-        !localButtonHoldTriggered &&
+    if (!localButtonHoldTriggered &&
         Encoder::isButtonPressed() &&
         millis() - localButtonPressStartTime >= LOCAL_BUTTON_HOLD_MS)
     {
-        if (pageCycler.page() == static_cast<uint8_t>(RxPage::UnitName))
+        if (unitLabelEditor.isActive())
         {
-            beginUnitNameEdit();
+            unitLabelEditor.back();
+            if (!unitLabelEditor.isActive())
+            {
+                Serial.println("Unit label edit cancelled");
+            }
+            showCurrentPage();
+            localButtonHoldTriggered = true;
+        }
+        else if (pageCycler.page() == static_cast<uint8_t>(RxPage::UnitLabel))
+        {
+            beginUnitLabelEdit();
             showCurrentPage();
             localButtonHoldTriggered = true;
         }
@@ -661,12 +660,12 @@ void loop()
         }
     }
 
-    if (unitEditState != UnitEditState::None)
+    if (unitLabelEditor.isActive())
     {
-        int unitEditTurn = Encoder::consumeTurn();
-        if (unitEditTurn != 0)
+        int unitLabelTurn = Encoder::consumeTurn();
+        if (unitLabelTurn != 0)
         {
-            stepUnitNameEditChar(unitEditTurn);
+            unitLabelEditor.stepChar(unitLabelTurn);
             showCurrentPage();
         }
     }

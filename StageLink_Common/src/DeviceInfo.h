@@ -16,6 +16,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include "Label.h"
 
 namespace StageLink
 {
@@ -74,27 +75,19 @@ namespace StageLink
     // string - see formatDeviceIdShort() below for a human-readable form.
     constexpr uint8_t DEVICE_ID_LENGTH = 6;
 
-    // User-assigned short label (e.g. "A1", "B2") for telling apart
-    // multiple RxQ units in one setup - unlike deviceId, this is not
-    // guaranteed unique, just operator-chosen. 2 characters, A-Z/0-9
-    // only (see UNIT_NAME_CHARSET/isValidUnitNameChar) - persisted on RX
-    // via ConfigManager (see RX main.cpp), defaults to UNIT_NAME_DEFAULT
-    // until an operator sets it.
-    constexpr uint8_t UNIT_NAME_LENGTH = 3; // 2 chars + null terminator
-    constexpr char UNIT_NAME_DEFAULT[UNIT_NAME_LENGTH] = "A1";
-    constexpr char UNIT_NAME_CHARSET[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    constexpr uint8_t UNIT_NAME_CHARSET_LENGTH = sizeof(UNIT_NAME_CHARSET) - 1; // exclude the string's own null terminator
-
-    inline bool isValidUnitNameChar(char c)
-    {
-        return (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
-    }
+    // User-assigned label (e.g. "DRAGONHEAD", "SMOKE01") for telling
+    // apart multiple RxQ units in one setup - unlike deviceId, this is
+    // not guaranteed unique, just operator-chosen. Up to LABEL_MAX_LENGTH
+    // characters from LABEL_CHARSET (see Label.h) - persisted on RX via
+    // ConfigManager (see RX main.cpp), defaults to LABEL_DEFAULT until an
+    // operator sets it.
+    constexpr uint8_t UNIT_LABEL_LENGTH = LABEL_BUFFER_SIZE;
 
     struct DeviceInfo
     {
         char name[DEVICE_NAME_MAX_LENGTH];
         uint8_t deviceId[DEVICE_ID_LENGTH];
-        char unitName[UNIT_NAME_LENGTH];
+        char unitLabel[UNIT_LABEL_LENGTH];
         char firmwareVersion[DEVICE_VERSION_MAX_LENGTH];
         char hardwareVersion[DEVICE_HW_VERSION_MAX_LENGTH];
         CapabilityMask capabilities;
@@ -103,7 +96,7 @@ namespace StageLink
     constexpr uint8_t DEVICE_INFO_WIRE_SIZE =
         DEVICE_NAME_MAX_LENGTH +
         DEVICE_ID_LENGTH +
-        UNIT_NAME_LENGTH +
+        UNIT_LABEL_LENGTH +
         DEVICE_VERSION_MAX_LENGTH +
         DEVICE_HW_VERSION_MAX_LENGTH +
         sizeof(CapabilityMask);
@@ -121,8 +114,8 @@ namespace StageLink
         memcpy(payload + offset, info.deviceId, DEVICE_ID_LENGTH);
         offset += DEVICE_ID_LENGTH;
 
-        memcpy(payload + offset, info.unitName, UNIT_NAME_LENGTH);
-        offset += UNIT_NAME_LENGTH;
+        memcpy(payload + offset, info.unitLabel, UNIT_LABEL_LENGTH);
+        offset += UNIT_LABEL_LENGTH;
 
         memcpy(payload + offset, info.firmwareVersion, DEVICE_VERSION_MAX_LENGTH);
         offset += DEVICE_VERSION_MAX_LENGTH;
@@ -156,9 +149,9 @@ namespace StageLink
         memcpy(outInfo.deviceId, payload + offset, DEVICE_ID_LENGTH);
         offset += DEVICE_ID_LENGTH;
 
-        memcpy(outInfo.unitName, payload + offset, UNIT_NAME_LENGTH);
-        outInfo.unitName[UNIT_NAME_LENGTH - 1] = '\0';
-        offset += UNIT_NAME_LENGTH;
+        memcpy(outInfo.unitLabel, payload + offset, UNIT_LABEL_LENGTH);
+        outInfo.unitLabel[UNIT_LABEL_LENGTH - 1] = '\0';
+        offset += UNIT_LABEL_LENGTH;
 
         memcpy(outInfo.firmwareVersion, payload + offset, DEVICE_VERSION_MAX_LENGTH);
         outInfo.firmwareVersion[DEVICE_VERSION_MAX_LENGTH - 1] = '\0';

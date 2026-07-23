@@ -208,7 +208,7 @@ void Display::showDeviceInfo(const RemoteDevice &remote)
     }
 
     display.print("Unit: ");
-    display.println(remote.info.unitName);
+    display.println(remote.info.unitLabel);
 
     display.println(remote.info.name);
 
