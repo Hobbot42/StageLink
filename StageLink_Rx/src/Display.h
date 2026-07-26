@@ -127,4 +127,14 @@ public:
         uint8_t fieldIndex,
         uint8_t fieldCount
     );
+
+    // See UpdateMode.h. ipAddress is nullptr/empty until WiFi actually
+    // connects; secondsRemaining < 0 hides the countdown (used once a
+    // flash is in progress, since UpdateMode stops enforcing the
+    // no-connection timeout at that point).
+    static void showUpdateMode(
+        const char *statusLine,
+        const char *ipAddress,
+        int secondsRemaining
+    );
 };

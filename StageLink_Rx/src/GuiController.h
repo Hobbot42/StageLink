@@ -51,7 +51,9 @@ public:
     // previousCue() - see handlePress()/handleRotate()'s Screen::ShowRun
     // cases). outputManager is passed straight through to
     // showEngine.executeCurrentCue() right after go() - GuiController
-    // itself never calls OutputManager::update() directly.
+    // itself never calls OutputManager::update() directly. enterUpdateMode
+    // is called when the operator selects Setup > Update Mode (see
+    // UpdateMode.h) - same shape as enterLegacyMode.
     void begin(
         StageLink::DeviceInfo &deviceInfo,
         StageLink::LabelEditor &labelEditor,
@@ -59,7 +61,8 @@ public:
         StageLink::OutputManager &outputManager,
         ShowEngine &showEngine,
         void (*commitUnitLabel)(),
-        void (*enterLegacyMode)()
+        void (*enterLegacyMode)(),
+        void (*enterUpdateMode)()
     );
 
     // Encoder rotation: navigate a list, or change the field/character
@@ -189,4 +192,5 @@ private:
     ShowEngine *showEngine_ = nullptr;
     void (*commitUnitLabel_)() = nullptr;
     void (*enterLegacyMode_)() = nullptr;
+    void (*enterUpdateMode_)() = nullptr;
 };

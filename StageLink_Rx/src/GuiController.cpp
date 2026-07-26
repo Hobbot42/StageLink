@@ -24,7 +24,7 @@ namespace
     constexpr const char *STEPPER_FIELDS[] = { "VALUE" };
 
     constexpr const char *MODE_MENU_ITEMS[] = { "Show Mode", "Program Mode", "Setup Mode" };
-    constexpr const char *SETUP_ITEMS[] = { "Unit Label", "Diagnostics" };
+    constexpr const char *SETUP_ITEMS[] = { "Unit Label", "Diagnostics", "Update Mode" };
 
     uint8_t wrapIndex(uint8_t current, int step, uint8_t count)
     {
@@ -65,7 +65,8 @@ void GuiController::begin(
     StageLink::OutputManager &outputManager,
     ShowEngine &showEngine,
     void (*commitUnitLabel)(),
-    void (*enterLegacyMode)()
+    void (*enterLegacyMode)(),
+    void (*enterUpdateMode)()
 )
 {
     deviceInfo_ = &deviceInfo;
@@ -75,6 +76,7 @@ void GuiController::begin(
     showEngine_ = &showEngine;
     commitUnitLabel_ = commitUnitLabel;
     enterLegacyMode_ = enterLegacyMode;
+    enterUpdateMode_ = enterUpdateMode;
 
     seedFakeData();
 
@@ -334,7 +336,7 @@ void GuiController::handleRotate(int direction)
             break;
 
         case Screen::SetupList:
-            currentSelection() = wrapIndex(currentSelection(), step, 2);
+            currentSelection() = wrapIndex(currentSelection(), step, 3);
             break;
 
         case Screen::UnitLabelEdit:
@@ -483,9 +485,16 @@ void GuiController::handlePress()
                 labelEditor_->begin(deviceInfo_->unitLabel);
                 pushScreen(Screen::UnitLabelEdit);
             }
-            else if (enterLegacyMode_ != nullptr) // Diagnostics
+            else if (currentSelection() == 1) // Diagnostics
             {
-                enterLegacyMode_();
+                if (enterLegacyMode_ != nullptr)
+                {
+                    enterLegacyMode_();
+                }
+            }
+            else if (enterUpdateMode_ != nullptr) // Update Mode
+            {
+                enterUpdateMode_();
             }
             break;
 
@@ -644,7 +653,7 @@ void GuiController::render()
         }
 
         case Screen::SetupList:
-            Display::showGuiList("SETUP", nullptr, SETUP_ITEMS, 2, currentSelection());
+            Display::showGuiList("SETUP", nullptr, SETUP_ITEMS, 3, currentSelection());
             break;
 
         case Screen::UnitLabelEdit:

@@ -48,6 +48,7 @@
 #include "GuiController.h"
 #include "UiButton.h"
 #include "ShowEngine.h"
+#include "UpdateMode.h"
 #include "OutputList.h"
 #include "RxQInfo.h"
 #include "FxQBuildInfo.h"
@@ -552,6 +553,19 @@ void exitLegacyMode()
     showCurrentPage();
 }
 
+// Reached from GuiController's Setup > Update Mode (see UpdateMode.h) -
+// brings up WiFi + ArduinoOTA for a firmware push. Deliberately doesn't
+// stop radio/ShowEngine/ActionEngine first: ESP-NOW keeps running but
+// the TX link will drop the moment WiFi.begin() moves this board's
+// radio onto the AP's channel (see the ReliableRadio channel
+// discussion) - expected, since the only way out of Update Mode is
+// ESP.restart() (see UpdateMode::update()), which re-initializes
+// everything cleanly from setup() again.
+void enterUpdateMode()
+{
+    UpdateMode::begin();
+}
+
 void setLinkState(LinkState newState, bool forceDisplayUpdate = false)
 {
     if (!forceDisplayUpdate && newState == linkState)
@@ -668,7 +682,7 @@ void setup()
     // duplicating any of that logic. showEngine feeds Show Mode's
     // display and, via outputManager, GO's action execution - see
     // GuiController.h.
-    guiController.begin(localDeviceInfo, unitLabelEditor, radio, outputManager, showEngine, commitUnitLabelEdit, enterLegacyMode);
+    guiController.begin(localDeviceInfo, unitLabelEditor, radio, outputManager, showEngine, commitUnitLabelEdit, enterLegacyMode, enterUpdateMode);
 
     displayReady = Display::begin();
     if (!displayReady)
@@ -698,6 +712,16 @@ void setup()
 
 void loop()
 {
+    // Update Mode owns the board entirely while active (see UpdateMode.h)
+    // - normal ESP-NOW/ShowEngine/output processing is skipped outright
+    // rather than interleaved, since the two are mutually exclusive for
+    // this boot cycle (see enterUpdateMode() above).
+    if (UpdateMode::isActive())
+    {
+        UpdateMode::update();
+        return;
+    }
+
     radio.update();
     Encoder::update();
     backButton.update();

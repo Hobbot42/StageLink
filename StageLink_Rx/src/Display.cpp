@@ -484,3 +484,38 @@ void Display::showGuiValueEntry(
 
     endScreen();
 }
+
+void Display::showUpdateMode(
+    const char *statusLine,
+    const char *ipAddress,
+    int secondsRemaining
+)
+{
+    beginScreen();
+    printIdentityLine();
+    printLine("UPDATE MODE");
+    printLine();
+
+    printLine(statusLine);
+    printLine();
+
+    if (ipAddress != nullptr && ipAddress[0] != '\0')
+    {
+        char buffer[32];
+        snprintf(buffer, sizeof(buffer), "IP: %s", ipAddress);
+        printLine(buffer);
+    }
+    else
+    {
+        printLine("IP: --");
+    }
+
+    if (secondsRemaining >= 0)
+    {
+        char buffer[32];
+        snprintf(buffer, sizeof(buffer), "Timeout: %ds", secondsRemaining);
+        printLine(buffer);
+    }
+
+    endScreen();
+}
