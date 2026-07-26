@@ -228,6 +228,33 @@ bool StageLink::ReliableRadio::send(
         return false;
     }
 
+    // VALUE_UPDATE represents a continuously-changing live value (e.g.
+    // encoder/servo angle), identified by its channel byte (payload[0] -
+    // see encodeValueUpdate). Only the latest value for a given channel
+    // still matters once queued, so an update still waiting to be sent is
+    // overwritten in place rather than appended behind it. Without this,
+    // a burst of rapid changes (e.g. spinning an encoder quickly) queues
+    // up a growing backlog that the strict one-in-flight/ACKed ordering
+    // below can only drain one full round-trip at a time, so the
+    // receiver ends up chasing a trail of stale values instead of the
+    // current one. Only ever touches still-queued packets - pendingPacket
+    // is already on the air and can't be recalled.
+    if (type == PacketType::VALUE_UPDATE && payloadLength > 0)
+    {
+        for (uint8_t i = sendTail; i != sendHead; i = nextIndex(i))
+        {
+            if (sendQueue[i].type == PacketType::VALUE_UPDATE &&
+                sendQueue[i].payloadLength == payloadLength &&
+                static_cast<uint8_t>(sendQueue[i].payload[0]) == payload[0])
+            {
+                sendQueue[i].sequence = nextSequence++;
+                sendQueue[i].sessionId = localSessionId;
+                memcpy(sendQueue[i].payload, payload, payloadLength);
+                return true;
+            }
+        }
+    }
+
     uint8_t next = nextIndex(sendHead);
     if (next == sendTail)
     {

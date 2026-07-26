@@ -45,6 +45,9 @@
 #include "DeviceInfo.h"
 #include "Label.h"
 #include "LabelEditor.h"
+#include "GuiController.h"
+#include "UiButton.h"
+#include "ShowEngine.h"
 #include "OutputList.h"
 #include "RxQInfo.h"
 #include "FxQBuildInfo.h"
@@ -89,12 +92,28 @@ constexpr unsigned long LOCAL_BUTTON_HOLD_MS = 600;
 // back correct on its own, without needing a new radio packet.
 constexpr unsigned long OUTPUT_REFRESH_INTERVAL_MS = 750;
 
+// Disables TX's old manual test-value path (encoder-driven live
+// VALUE_UPDATE and the matching STATE_SNAPSHOT fields) from reaching
+// OutputManager, so it can no longer override ShowEngine-commanded
+// output state (see StageLink RxQ - Disable Old Remote Output Test
+// Control v0.1). The packets themselves are still received, logged, and
+// (for servoAngle) reflected on RX's own Status display - only the
+// outputManager.update() call is skipped. Flip back to true for
+// hardware bring-up/testing without a show loaded.
+constexpr bool TX_TEST_OUTPUT_CONTROL_ENABLED = false;
+
 // RX's own local encoder (button only used for local page cycling - its
 // rotation is read for the diagnostics display but not transmitted).
 constexpr uint8_t ENCODER_CLK_PIN = 32;
 constexpr uint8_t ENCODER_DT_PIN = 33;
-constexpr uint8_t ENCODER_BUTTON_PIN = 25;
-constexpr uint8_t SERVO_PIN = 19;
+constexpr uint8_t ENCODER_BUTTON_PIN = 26;
+constexpr uint8_t SERVO_PIN = 16; // OUT-02 Pin 1
+
+// Dedicated GUI buttons (see GuiController.h) - additional to, not
+// replacing, the encoder's own press/hold gestures. Only read while
+// guiActive (see loop()); legacy mode's behavior is unaffected.
+constexpr uint8_t BACK_BUTTON_PIN = 27;
+constexpr uint8_t ACTION_BUTTON_PIN = 4;
 
 // OutputManager channel numbering is local to this board - it identifies
 // "which output device" and is decoupled from the wire-level ValueChannel/
@@ -129,6 +148,29 @@ bool localButtonHoldTriggered = false;
 // last saved label. Generic across any future label type - see
 // StageLink_Common/src/LabelEditor.h.
 StageLink::LabelEditor unitLabelEditor;
+
+// FxQ GUI Architecture Prototype v0.1 - see GuiController.h. guiActive
+// selects which system currently owns the OLED and local button: true
+// (the default, "no menu on boot") routes to guiController; false hands
+// control back to the existing pageCycler-driven pages below (Setup >
+// Diagnostics enters that mode; holding on the Trigger Status page
+// exits it - see loop()). Nothing about the legacy pages themselves
+// changes based on this flag, only who gets shown by default.
+GuiController guiController;
+bool guiActive = true;
+
+// StageLink RxQ ShowEngine foundation (SHOW -> CUE -> ACTION) - see
+// ShowEngine.h. Only begin() is called (see setup()); not wired to any
+// input or display yet, deliberately - this step only establishes the
+// state-tracking layer future work builds on.
+ShowEngine showEngine;
+
+// Dedicated Back/Action buttons - see BACK_BUTTON_PIN/ACTION_BUTTON_PIN
+// above. Mirror the encoder's hold/press gestures (see loop()) rather
+// than replacing them.
+UiButton backButton(BACK_BUTTON_PIN);
+UiButton actionButton(ACTION_BUTTON_PIN);
+
 // TX's remote encoder position/button state, as last received over radio.
 int encoderValue = 0;
 int servoAngle = 0;
@@ -351,6 +393,12 @@ void printStartupBanner()
     Serial.println("========================");
     Serial.println(FxQ::PROJECT_BRAND);
     Serial.println();
+    // GPIO16/17 (SERVO_PIN's connector) are reserved for PSRAM on some
+    // ESP32 modules - if PSRAM shows present here and the servo still
+    // fails to attach, that's almost certainly why, and SERVO_PIN needs
+    // to move to a different OUT connector.
+    Serial.print("PSRAM: ");
+    Serial.println(ESP.getPsramSize() > 0 ? "present" : "not present");
     Serial.print("Product: ");
     Serial.println(FxQ::PRODUCT_NAME);
     Serial.print("Version: ");
@@ -379,6 +427,28 @@ void printStartupBanner()
     Serial.println(idBuffer);
     Serial.print("FW: ");
     Serial.println(localDeviceInfo.firmwareVersion);
+
+    // Full MAC, formatted for a direct copy-paste into TX main.cpp's
+    // receiverAddress[] - TX addresses RX by this array since RX doesn't
+    // know TX's address ahead of time (see ReliableRadio::begin()), so
+    // this must be updated by hand whenever RX's actual hardware
+    // (chip/board) changes.
+    Serial.print("MAC (for TX receiverAddress[]): ");
+    for (uint8_t i = 0; i < StageLink::DEVICE_ID_LENGTH; ++i)
+    {
+        if (i > 0)
+        {
+            Serial.print(", ");
+        }
+        Serial.print("0x");
+        if (localDeviceInfo.deviceId[i] < 0x10)
+        {
+            Serial.print("0");
+        }
+        Serial.print(localDeviceInfo.deviceId[i], HEX);
+    }
+    Serial.println();
+
     Serial.println();
 
     Serial.println("Starting...");
@@ -407,8 +477,17 @@ void showCurrentPage()
         return;
     }
 
+    if (guiActive)
+    {
+        guiController.render();
+        return;
+    }
+
     // Editing takes over the display regardless of which page is
-    // selected - see beginUnitLabelEdit()/commitUnitLabelEdit().
+    // selected - see beginUnitLabelEdit()/commitUnitLabelEdit(). Only
+    // reachable in legacy mode (guiActive == false) - the GUI's own
+    // Setup > Unit Label flow renders the same shared unitLabelEditor
+    // via GuiController::render() instead (see GuiController.cpp).
     if (unitLabelEditor.isActive())
     {
         Display::showUnitLabelEdit(unitLabelEditor.buffer(), unitLabelEditor.cursor());
@@ -450,6 +529,27 @@ void showCurrentPage()
     {
         Display::showTriggerStatus(lastTriggerLabel, lastTriggerEffectNumber);
     }
+}
+
+// Reached from GuiController's Setup > Diagnostics (see the callback
+// passed to guiController.begin() in setup()) - hands the display and
+// local button back to the existing pageCycler-driven pages, starting
+// from Status, completely unchanged from how they behaved before this
+// GUI prototype existed.
+void enterLegacyMode()
+{
+    guiActive = false;
+    pageCycler.begin(RX_PAGE_COUNT);
+    showCurrentPage();
+}
+
+// Reached by holding on the Trigger Status page (see loop()) - the one
+// legacy page with no hold-action of its own already, so this doesn't
+// take over a gesture anything else needs.
+void exitLegacyMode()
+{
+    guiActive = true;
+    showCurrentPage();
 }
 
 void setLinkState(LinkState newState, bool forceDisplayUpdate = false)
@@ -504,11 +604,18 @@ void setup()
     StatusLED::begin();
     StatusLED::setOffline();
 
+    // RX's encoder produces 4 quadrature transitions per physical click
+    // (confirmed - differs from TX's encoder, which needs 2; see
+    // Encoder.h).
     Encoder::begin(
         ENCODER_CLK_PIN,
         ENCODER_DT_PIN,
-        ENCODER_BUTTON_PIN
+        ENCODER_BUTTON_PIN,
+        4
     );
+
+    backButton.begin();
+    actionButton.begin();
 
     if (!outputManager.registerDevice(OUTPUT_CHANNEL_SERVO, &servoOutputDevice))
     {
@@ -549,6 +656,20 @@ void setup()
     initDeviceInfo();
     initOutputList();
 
+    // ShowEngine foundation - see ShowEngine.h. begin() loads the
+    // hardcoded test show and logs it. Called before guiController.begin()
+    // below so Show Mode's first render already has real cue data to
+    // read, not just a stored (but not yet populated) reference.
+    showEngine.begin();
+
+    // FxQ GUI Architecture Prototype v0.1 - see GuiController.h. Reuses
+    // localDeviceInfo/unitLabelEditor/radio/outputManager and the
+    // commit/legacy-mode functions already defined above rather than
+    // duplicating any of that logic. showEngine feeds Show Mode's
+    // display and, via outputManager, GO's action execution - see
+    // GuiController.h.
+    guiController.begin(localDeviceInfo, unitLabelEditor, radio, outputManager, showEngine, commitUnitLabelEdit, enterLegacyMode);
+
     displayReady = Display::begin();
     if (!displayReady)
     {
@@ -579,23 +700,23 @@ void loop()
 {
     radio.update();
     Encoder::update();
+    backButton.update();
+    actionButton.update();
     ledOutputDevice.tick();
+    servoOutputDevice.tick();
     effectEngine.update();
 
-    // Local encoder button: short press cycles RX's own OLED page on
-    // every page, unconditionally - a long press only does something
-    // different on two specific pages (see LOCAL_BUTTON_HOLD_MS below):
-    // Unit Label starts editing it, Effect Test fires
-    // TRIGGER_LOCAL_BUTTON_1. Either way the hold action fires the
-    // moment the hold threshold elapses, while the button is still down,
-    // rather than waiting for release, so the display updates as
-    // immediate feedback that the hold registered. While editing a unit
-    // label, a short press instead confirms the current character and
-    // advances (see LabelEditor::confirmChar()), and a hold steps back to
-    // re-edit the previous character - or cancels the whole edit at the
-    // first character (see LabelEditor::back()). This is purely local UI
-    // navigation, distinct from encoderButtonPressed (TX's remote encoder
-    // button state, received over radio and unaffected by any of this).
+    // Local encoder button: rotate/press, dispatched to whichever system
+    // currently owns the display (see guiActive above). GUI mode uses
+    // rotate=navigate, press=select/confirm/GO (see GuiController.h) -
+    // the encoder's own hold gesture does nothing in GUI mode anymore,
+    // now that the dedicated Back button exists to drive handleHold().
+    // Legacy mode keeps its original,
+    // completely unchanged page-cycling/Unit-Label-editing/Effect-Test-
+    // triggering behavior, hold included. This is purely local UI
+    // navigation, distinct from encoderButtonPressed (TX's remote
+    // encoder button state, received over radio and unaffected by any
+    // of this).
     //
     // The state-change edge is consumed first, so a fresh press always
     // resets localButtonPressStartTime before the hold check below ever
@@ -603,6 +724,7 @@ void loop()
     // previous press's stale start time on the very iteration a new
     // press begins, firing the hold action instantly on a short click.
     bool localButtonPressed;
+    bool localButtonReleased = false;
     if (Encoder::consumeButtonStateChange(localButtonPressed))
     {
         if (localButtonPressed)
@@ -610,63 +732,144 @@ void loop()
             localButtonPressStartTime = millis();
             localButtonHoldTriggered = false;
         }
-        else if (localButtonHoldTriggered)
-        {
-            // This release just ended a hold that already did something
-            // (opened edit mode, stepped back a character, or fired the
-            // effect test trigger) - nothing more to do for it.
-            localButtonHoldTriggered = false;
-        }
-        else if (unitLabelEditor.isActive())
-        {
-            if (unitLabelEditor.confirmChar())
-            {
-                commitUnitLabelEdit();
-            }
-            showCurrentPage();
-        }
         else
         {
-            pageCycler.next();
-            showCurrentPage();
+            localButtonReleased = true;
         }
     }
 
-    if (!localButtonHoldTriggered &&
+    bool localButtonHoldNow = !localButtonHoldTriggered &&
         Encoder::isButtonPressed() &&
-        millis() - localButtonPressStartTime >= LOCAL_BUTTON_HOLD_MS)
+        millis() - localButtonPressStartTime >= LOCAL_BUTTON_HOLD_MS;
+
+    if (guiActive)
     {
-        if (unitLabelEditor.isActive())
+        // No hold gesture here anymore - a release is always a press
+        // (select/confirm/GO), regardless of how long the encoder was
+        // held down.
+        if (localButtonReleased)
         {
-            unitLabelEditor.back();
-            if (!unitLabelEditor.isActive())
+            guiController.handlePress();
+            showCurrentPage();
+        }
+
+        int guiTurn = Encoder::consumeTurn();
+        if (guiTurn != 0)
+        {
+            guiController.handleRotate(guiTurn);
+            showCurrentPage();
+        }
+
+        // Dedicated Back button: the only way to fire handleHold() in
+        // GUI mode now - see GuiController.h. Goes up to the Mode Menu
+        // from a root screen (Show Run/Show List/Setup List) and does
+        // nothing from the Mode Menu itself.
+        if (backButton.consumePress())
+        {
+            guiController.handleHold();
+            showCurrentPage();
+        }
+
+        if (actionButton.consumePress())
+        {
+            guiController.handlePress();
+            showCurrentPage();
+        }
+    }
+    else
+    {
+        // Exact legacy behavior - unaffected by any of the above.
+        if (localButtonReleased)
+        {
+            if (localButtonHoldTriggered)
             {
-                Serial.println("Unit label edit cancelled");
+                // This release just ended a hold that already did
+                // something (opened edit mode, stepped back a
+                // character, fired the effect test trigger, or exited
+                // legacy mode) - nothing more to do for it.
+                localButtonHoldTriggered = false;
+            }
+            else if (unitLabelEditor.isActive())
+            {
+                if (unitLabelEditor.confirmChar())
+                {
+                    commitUnitLabelEdit();
+                }
+                showCurrentPage();
+            }
+            else
+            {
+                pageCycler.next();
+                showCurrentPage();
+            }
+        }
+
+        if (localButtonHoldNow)
+        {
+            if (unitLabelEditor.isActive())
+            {
+                unitLabelEditor.back();
+                if (!unitLabelEditor.isActive())
+                {
+                    Serial.println("Unit label edit cancelled");
+                }
+                showCurrentPage();
+                localButtonHoldTriggered = true;
+            }
+            else if (pageCycler.page() == static_cast<uint8_t>(RxPage::UnitLabel))
+            {
+                beginUnitLabelEdit();
+                showCurrentPage();
+                localButtonHoldTriggered = true;
+            }
+            else if (pageCycler.page() == static_cast<uint8_t>(RxPage::EffectTest))
+            {
+                fireTrigger("Local Button", StageLink::TRIGGER_LOCAL_BUTTON_1);
+                showCurrentPage();
+                localButtonHoldTriggered = true;
+            }
+            else if (pageCycler.page() == static_cast<uint8_t>(RxPage::TriggerStatus))
+            {
+                // The one legacy page with no hold-action of its own -
+                // free to use as the way back to the GUI prototype.
+                exitLegacyMode();
+                localButtonHoldTriggered = true;
+            }
+        }
+
+        // Dedicated Back button: a consistent "back/cancel" exit from
+        // legacy mode, available from every legacy page - not just
+        // TriggerStatus (the hold-based exit above is kept for
+        // compatibility, but it's easy to get stuck behind if you don't
+        // know which page to reach first, e.g. entering on Diagnostics).
+        // Cancels an in-progress label edit first if one is active,
+        // matching how the encoder hold already behaves while editing,
+        // rather than abandoning the edit and exiting in one step.
+        if (backButton.consumePress())
+        {
+            if (unitLabelEditor.isActive())
+            {
+                unitLabelEditor.back();
+                if (!unitLabelEditor.isActive())
+                {
+                    Serial.println("Unit label edit cancelled");
+                }
+            }
+            else
+            {
+                exitLegacyMode();
             }
             showCurrentPage();
-            localButtonHoldTriggered = true;
         }
-        else if (pageCycler.page() == static_cast<uint8_t>(RxPage::UnitLabel))
-        {
-            beginUnitLabelEdit();
-            showCurrentPage();
-            localButtonHoldTriggered = true;
-        }
-        else if (pageCycler.page() == static_cast<uint8_t>(RxPage::EffectTest))
-        {
-            fireTrigger("Local Button", StageLink::TRIGGER_LOCAL_BUTTON_1);
-            showCurrentPage();
-            localButtonHoldTriggered = true;
-        }
-    }
 
-    if (unitLabelEditor.isActive())
-    {
-        int unitLabelTurn = Encoder::consumeTurn();
-        if (unitLabelTurn != 0)
+        if (unitLabelEditor.isActive())
         {
-            unitLabelEditor.stepChar(unitLabelTurn);
-            showCurrentPage();
+            int unitLabelTurn = Encoder::consumeTurn();
+            if (unitLabelTurn != 0)
+            {
+                unitLabelEditor.stepChar(unitLabelTurn);
+                showCurrentPage();
+            }
         }
     }
 
@@ -744,7 +947,10 @@ void loop()
                      StageLink::ValueChannel::Servo)
         {
             servoAngle = StageLink::decodeValueUpdateValue(packet.payload);
-            outputManager.update(OUTPUT_CHANNEL_SERVO, servoAngle);
+            if (TX_TEST_OUTPUT_CONTROL_ENABLED)
+            {
+                outputManager.update(OUTPUT_CHANNEL_SERVO, servoAngle);
+            }
 
             Serial.print("Servo angle received: ");
             Serial.println(servoAngle);
@@ -757,7 +963,10 @@ void loop()
                      StageLink::ValueChannel::LedRed)
         {
             int value = StageLink::decodeValueUpdateValue(packet.payload);
-            outputManager.update(OUTPUT_CHANNEL_LED_RED, value);
+            if (TX_TEST_OUTPUT_CONTROL_ENABLED)
+            {
+                outputManager.update(OUTPUT_CHANNEL_LED_RED, value);
+            }
 
             Serial.print("LED red received: ");
             Serial.println(value);
@@ -768,7 +977,10 @@ void loop()
                      StageLink::ValueChannel::LedGreen)
         {
             int value = StageLink::decodeValueUpdateValue(packet.payload);
-            outputManager.update(OUTPUT_CHANNEL_LED_GREEN, value);
+            if (TX_TEST_OUTPUT_CONTROL_ENABLED)
+            {
+                outputManager.update(OUTPUT_CHANNEL_LED_GREEN, value);
+            }
 
             Serial.print("LED green received: ");
             Serial.println(value);
@@ -779,7 +991,10 @@ void loop()
                      StageLink::ValueChannel::LedBlue)
         {
             int value = StageLink::decodeValueUpdateValue(packet.payload);
-            outputManager.update(OUTPUT_CHANNEL_LED_BLUE, value);
+            if (TX_TEST_OUTPUT_CONTROL_ENABLED)
+            {
+                outputManager.update(OUTPUT_CHANNEL_LED_BLUE, value);
+            }
 
             Serial.print("LED blue received: ");
             Serial.println(value);
@@ -790,7 +1005,10 @@ void loop()
                      StageLink::ValueChannel::LedBrightness)
         {
             int value = StageLink::decodeValueUpdateValue(packet.payload);
-            outputManager.update(OUTPUT_CHANNEL_LED_BRIGHTNESS, value);
+            if (TX_TEST_OUTPUT_CONTROL_ENABLED)
+            {
+                outputManager.update(OUTPUT_CHANNEL_LED_BRIGHTNESS, value);
+            }
 
             Serial.print("LED brightness received: ");
             Serial.println(value);
@@ -832,19 +1050,34 @@ void loop()
                             break;
                         case StageLink::StateItemType::Servo:
                             servoAngle = item.value;
-                            outputManager.update(OUTPUT_CHANNEL_SERVO, servoAngle);
+                            if (TX_TEST_OUTPUT_CONTROL_ENABLED)
+                            {
+                                outputManager.update(OUTPUT_CHANNEL_SERVO, servoAngle);
+                            }
                             break;
                         case StageLink::StateItemType::LedRed:
-                            outputManager.update(OUTPUT_CHANNEL_LED_RED, item.value);
+                            if (TX_TEST_OUTPUT_CONTROL_ENABLED)
+                            {
+                                outputManager.update(OUTPUT_CHANNEL_LED_RED, item.value);
+                            }
                             break;
                         case StageLink::StateItemType::LedGreen:
-                            outputManager.update(OUTPUT_CHANNEL_LED_GREEN, item.value);
+                            if (TX_TEST_OUTPUT_CONTROL_ENABLED)
+                            {
+                                outputManager.update(OUTPUT_CHANNEL_LED_GREEN, item.value);
+                            }
                             break;
                         case StageLink::StateItemType::LedBlue:
-                            outputManager.update(OUTPUT_CHANNEL_LED_BLUE, item.value);
+                            if (TX_TEST_OUTPUT_CONTROL_ENABLED)
+                            {
+                                outputManager.update(OUTPUT_CHANNEL_LED_BLUE, item.value);
+                            }
                             break;
                         case StageLink::StateItemType::LedBrightness:
-                            outputManager.update(OUTPUT_CHANNEL_LED_BRIGHTNESS, item.value);
+                            if (TX_TEST_OUTPUT_CONTROL_ENABLED)
+                            {
+                                outputManager.update(OUTPUT_CHANNEL_LED_BRIGHTNESS, item.value);
+                            }
                             break;
                         default:
                             break; // unknown/future item types are safely ignored

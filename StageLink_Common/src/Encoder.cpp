@@ -5,11 +5,12 @@
 namespace
 {
     constexpr unsigned long BUTTON_DEBOUNCE_MS = 30;
-    // This encoder's detent spacing produces 2 valid quadrature transitions
-    // per physical click, so movement only commits once that many
-    // transitions have accumulated in one direction - filters out the
-    // "half step" a mechanical detent can otherwise register as noise.
-    constexpr int QUADRATURE_TRANSITIONS_PER_STEP = 2;
+    // Set by begin() - how many valid quadrature transitions this board's
+    // encoder produces per physical click, so movement only commits once
+    // that many transitions have accumulated in one direction. TX and RX
+    // have confirmed different values here (different physical encoders),
+    // so this is per-instance via begin(), not a shared constant.
+    int quadratureTransitionsPerStep = 4;
 
     // Lookup table of movement (-1/0/+1) indexed by
     // (previousState << 2 | currentState), where state is the 2-bit
@@ -45,12 +46,14 @@ namespace
 void Encoder::begin(
     uint8_t newClockPin,
     uint8_t newDataPin,
-    uint8_t newButtonPin
+    uint8_t newButtonPin,
+    int transitionsPerStep
 )
 {
     clockPin = newClockPin;
     dataPin = newDataPin;
     buttonPin = newButtonPin;
+    quadratureTransitionsPerStep = transitionsPerStep;
 
     pinMode(clockPin, INPUT_PULLUP);
     pinMode(dataPin, INPUT_PULLUP);
@@ -167,13 +170,13 @@ void IRAM_ATTR Encoder::handleRotationInterrupt()
 
         quadratureTransitionsSinceStep += movement;
 
-        if (quadratureTransitionsSinceStep >= QUADRATURE_TRANSITIONS_PER_STEP)
+        if (quadratureTransitionsSinceStep >= quadratureTransitionsPerStep)
         {
             encoderPosition++;
             pendingTurn++;
             quadratureTransitionsSinceStep = 0;
         }
-        else if (quadratureTransitionsSinceStep <= -QUADRATURE_TRANSITIONS_PER_STEP)
+        else if (quadratureTransitionsSinceStep <= -quadratureTransitionsPerStep)
         {
             encoderPosition--;
             pendingTurn--;

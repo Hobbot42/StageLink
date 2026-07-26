@@ -12,10 +12,18 @@
 class Encoder
 {
 public:
+    // transitionsPerStep is how many valid quadrature transitions this
+    // specific encoder produces per physical detent/click - not the
+    // same part on every board (TX and RX have been confirmed to
+    // differ), so each caller passes its own board's measured value
+    // rather than this being a shared constant. Too low commits
+    // multiple steps per click; too high requires multiple clicks to
+    // commit one step.
     static void begin(
         uint8_t clockPin,
         uint8_t dataPin,
-        uint8_t buttonPin
+        uint8_t buttonPin,
+        int transitionsPerStep
     );
 
     // Must be called every loop() - polls and debounces the button (rotation

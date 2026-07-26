@@ -44,7 +44,7 @@
 namespace
 {
 uint8_t receiverAddress[] = {
-    0x68, 0x09, 0x47, 0x3C, 0x49, 0xB4
+    0x68, 0x09, 0x47, 0xAC, 0xA5, 0x04
 };
 
 // Rotary encoder + integrated button pins.
@@ -64,6 +64,16 @@ constexpr unsigned long DISPLAY_REFRESH_INTERVAL_MS = 250;
 // Encoder button: short press cycles control mode, a hold past this
 // threshold cycles the OLED page instead (see loop()).
 constexpr unsigned long PAGE_CYCLE_HOLD_MS = 600;
+
+// Disables the encoder's live output-control send (sendControlValue()
+// below) so it can no longer override RxQ's ShowEngine-commanded output
+// state - the old hardware-bring-up test path, now superseded by real
+// cues (see StageLink RxQ - Disable Old Remote Output Test Control
+// v0.1). Local control-mode cycling/display and sendEncoderValue()
+// (informational only - RX doesn't drive any output from it) are
+// unaffected. Flip back to true for hardware bring-up/testing without a
+// show loaded on RX.
+constexpr bool LIVE_OUTPUT_CONTROL_ENABLED = false;
 
 // TX has no physical outputs of its own - the encoder drives whichever
 // remote channel is currently selected (see ControlMode), and RX applies
@@ -405,10 +415,14 @@ void setup()
 
     Button::begin();
 
+    // TX's encoder produces 2 quadrature transitions per physical click
+    // (confirmed - differs from RX's encoder, which needs 4; see
+    // Encoder.h).
     Encoder::begin(
         ENCODER_CLK_PIN,
         ENCODER_DT_PIN,
-        ENCODER_BUTTON_PIN
+        ENCODER_BUTTON_PIN,
+        2
     );
 
     for (uint8_t i = 0; i < CONTROL_MODE_COUNT; ++i)
@@ -518,7 +532,10 @@ void loop()
         Serial.println(Encoder::position());
 
         sendEncoderValue();
-        sendControlValue(currentMode);
+        if (LIVE_OUTPUT_CONTROL_ENABLED)
+        {
+            sendControlValue(currentMode);
+        }
         showCurrentPage();
     }
 

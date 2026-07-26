@@ -72,4 +72,59 @@ public:
     // fireTrigger()/TriggerManager.h. effectNumber is 1-based to match
     // "Effect 1" elsewhere; 0 means no trigger has fired since boot.
     static void showTriggerStatus(const char *lastTriggerLabel, int effectNumber);
+
+    // --- FxQ GUI Architecture Prototype v0.1 ---
+    // Generic screens reused across many menu levels (Show Menu, Edit
+    // Show, Edit Cue, Output Select, Command Select, Setup Menu) - see
+    // StageLink_Rx/src/GuiController.h. Fake-data navigation testing
+    // only, no real hardware/effect behavior.
+
+    // Scrollable "> "-cursor list. contextLabel is an optional second
+    // header line (e.g. the show name on Edit Show) - pass nullptr to
+    // omit it and gain one more visible row.
+    static void showGuiList(
+        const char *title,
+        const char *contextLabel,
+        const char *const *items,
+        uint8_t itemCount,
+        uint8_t selectedIndex
+    );
+
+    // SHOW MODE home screen - device label, show name, and a large-font
+    // current/next cue readout from ShowEngine (see GuiController.cpp):
+    // "QNN Name" for current, ">QNN Name" for next (see
+    // formatCueLabel()). No previous-cue line and no small "CURRENT"/
+    // "NEXT" text headers - dropped so both lines could be shown large
+    // (the display's real estate at this font doesn't allow headers,
+    // 2 large cue lines, and the signal bar all at once); the ">"
+    // prefix is what distinguishes next from current. A null or empty
+    // *CueName omits the name entirely (just "QNN", no trailing space).
+    // The bottom row is either a graphical RSSI signal-strength bar
+    // (rssiAvailable/rssi, same source as the legacy Diagnostics page)
+    // or "LINK LOST" text when linkOnline is false - automatically
+    // reverts to the bar once the link comes back, since this just
+    // reflects whatever render() passes in on the next call.
+    static void showGuiShowRun(
+        const char *deviceLabel,
+        const char *showName,
+        uint8_t currentCue,
+        const char *currentCueName,
+        uint8_t nextCue,
+        const char *nextCueName,
+        bool linkOnline,
+        bool rssiAvailable,
+        int8_t rssi
+    );
+
+    // One field at a time out of fieldCount (LED/Servo/Stepper action
+    // values, and Cue Time) - the value is passed pre-formatted so this
+    // stays agnostic to int vs. float fields.
+    static void showGuiValueEntry(
+        const char *title,
+        const char *contextLabel,
+        const char *fieldLabel,
+        const char *valueText,
+        uint8_t fieldIndex,
+        uint8_t fieldCount
+    );
 };

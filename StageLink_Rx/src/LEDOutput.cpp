@@ -22,10 +22,13 @@ public:
 namespace
 {
     // Fallback values used until these keys are ever written - defaults
-    // match the clocked (DI/CI) strip currently wired to RX.
+    // match the clocked (DI/CI) strip currently wired to RX: OUT-03
+    // (GPIO18/19). Data/clock order (18=data, 19=clock) is assumed, not
+    // separately confirmed - if the strip doesn't respond, try swapping
+    // these two values first.
     constexpr LEDProtocol DEFAULT_LED_PROTOCOL = LEDProtocol::APA102;
-    constexpr uint8_t DEFAULT_DATA_PIN = 4;
-    constexpr uint8_t DEFAULT_CLOCK_PIN = 5;
+    constexpr uint8_t DEFAULT_DATA_PIN = 18;
+    constexpr uint8_t DEFAULT_CLOCK_PIN = 19;
     constexpr int32_t DEFAULT_LED_COUNT = 8;
 
     // How often (and how far) tick() steps a channel toward its target.
