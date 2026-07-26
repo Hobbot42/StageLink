@@ -90,6 +90,7 @@ void UpdateMode::begin()
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
     ArduinoOTA.setHostname("stagelink-rx");
+    ArduinoOTA.setPassword(OTA_PASSWORD);
     ArduinoOTA.onStart(onOtaStart);
     ArduinoOTA.onEnd(onOtaEnd);
     ArduinoOTA.onError(onOtaError);
