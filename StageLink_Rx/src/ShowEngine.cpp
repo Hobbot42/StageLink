@@ -147,15 +147,7 @@ void ShowEngine::executeCurrentCue(StageLink::OutputManager &outputManager)
         }
 
         const Cue &cue = cues_[i];
-        for (uint8_t a = 0; a < cue.actionCount; ++a)
-        {
-            const Action &action = cue.actions[a];
-
-            if (action.command == ActionCommand::Level)
-            {
-                outputManager.update(action.outputId, action.value);
-            }
-        }
+        actionEngine_.executeActions(cue.actions, cue.actionCount, outputManager);
 
         return;
     }

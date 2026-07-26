@@ -1,11 +1,11 @@
 // StageLink RxQ Action
-// The unit of "what to do" inside a cue - see ShowEngine.h. First
-// version: point an OutputManager channel (outputId) at a value via one
-// command type, LEVEL (directly set the value - no ramping, fading,
-// timing, randomness, or any other command yet; see
-// actionCommandName()). A plain data holder - the only thing that ever
-// turns an Action into an OutputManager call is
-// ShowEngine::executeCurrentCue().
+// The unit of "what to do" inside a cue - see ShowEngine.h. Points an
+// OutputManager channel (outputId) at a value via a command type. Only
+// LEVEL is implemented (directly set the value - no ramping, fading,
+// timing, or randomness); COLOR and STATE exist as reserved command IDs
+// only - see ActionEngine.h for what happens (nothing) if one is used.
+// A plain data holder - the only thing that ever turns an Action into
+// an OutputManager call is ActionEngine::executeActions().
 // Belongs to: StageLink_Rx.
 
 #pragma once
@@ -14,8 +14,10 @@
 
 enum class ActionCommand : uint8_t
 {
-    Level = 0
-    // FADE/WAIT/RANDOM/EFFECT/PULSE intentionally not added yet.
+    Level = 0,
+    Color = 1, // placeholder - not implemented yet, see ActionEngine.h
+    State = 2  // placeholder - not implemented yet, see ActionEngine.h
+    // FADE/WAIT/RANDOM/EFFECT/PULSE intentionally not added yet either.
 };
 
 // Debug/display name - single source of truth so future callers (a

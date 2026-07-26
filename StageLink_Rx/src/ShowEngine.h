@@ -1,8 +1,10 @@
 // StageLink RxQ ShowEngine
-// RxQ's show system: SHOW -> CUE -> ACTION[] -> OutputManager. Tracks a
-// show's cues (number/name/actions) and the current/selected cue, and
-// can execute the current cue's actions on demand (executeCurrentCue())
-// - the first real link from a cue to physical output. Still no
+// RxQ's show system: SHOW -> CUE -> ACTION[] -> ActionEngine ->
+// OutputManager. Tracks a show's cues (number/name/actions) and the
+// current/selected cue, and can execute the current cue's actions on
+// demand (executeCurrentCue()) by handing them to ActionEngine (see
+// ActionEngine.h) - ShowEngine itself no longer talks to OutputManager
+// directly, it only finds which cue is current and delegates. Still no
 // persistence, no cue editing, no fades/timing - an action is applied
 // immediately and only when explicitly executed.
 //
@@ -25,6 +27,7 @@
 
 #include <cstdint>
 #include "Action.h"
+#include "ActionEngine.h"
 #include "OutputManager.h"
 
 class ShowEngine
@@ -66,13 +69,13 @@ public:
     // the loaded show.
     const char *getCueName(uint8_t cueNumber) const;
 
-    // 1. Finds the cue matching getCurrentCue(). 2. Walks its actions.
-    // 3. Sends each one to outputManager.update(action.outputId,
-    // action.value) - only ActionCommand::Level is handled (the only
-    // command that exists yet, see Action.h). No-op if the current cue
-    // has no actions or isn't found. Does not itself get called by go()/
-    // nextCue()/previousCue()/home() - a caller decides when to execute,
-    // typically right after go() (see GuiController.cpp).
+    // Finds the cue matching getCurrentCue() and hands its actions to
+    // ActionEngine::executeActions() (see ActionEngine.h) - no-op if the
+    // current cue has no actions or isn't found. Does not itself get
+    // called by go()/nextCue()/previousCue()/home() - a caller decides
+    // when to execute, typically right after go() (see
+    // GuiController.cpp). Signature unchanged from before ActionEngine
+    // existed, so existing callers don't need to change.
     void executeCurrentCue(StageLink::OutputManager &outputManager);
 
 private:
@@ -97,4 +100,5 @@ private:
     uint8_t cueCount_ = 0;
     uint8_t currentCue_ = 1;
     uint8_t selectedCue_ = 1;
+    ActionEngine actionEngine_;
 };
