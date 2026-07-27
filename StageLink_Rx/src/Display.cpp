@@ -280,7 +280,7 @@ void Display::showUnitLabel(const char *unitLabel)
 {
     beginScreen();
     printIdentityLine();
-    printLine("Unit Label");
+    printLine("Controller Label");
     printLine();
     printLine(unitLabel);
     printLine();
@@ -289,10 +289,10 @@ void Display::showUnitLabel(const char *unitLabel)
     endScreen();
 }
 
-void Display::showUnitLabelEdit(const char *buffer, uint8_t cursor)
+void Display::showUnitLabelEdit(const char *buffer, uint8_t cursor, bool useBackButton)
 {
     beginScreen();
-    printLine("Edit Unit Label");
+    printLine("Edit Controller Label");
     printLine();
     printLine(buffer);
 
@@ -314,7 +314,13 @@ void Display::showUnitLabelEdit(const char *buffer, uint8_t cursor)
     snprintf(charLine, sizeof(charLine), "Char %d of %d", cursor + 1, StageLink::LABEL_MAX_LENGTH);
     printLine(charLine);
 
-    printLine("Press=next Hold=back");
+    // The GUI shows no gesture hint - the controls are consistent across
+    // every screen, so a per-screen reminder is just a used row. The
+    // legacy diagnostic pages keep theirs: hold is not obvious there.
+    if (!useBackButton)
+    {
+        printLine("Press=next Hold=back");
+    }
 
     endScreen();
 }
@@ -431,8 +437,12 @@ void Display::showGuiShowRun(
 
     char cueLabel[32];
 
+    // "-" marks the cue that last ran, ">" the one GO will fire next.
+    // The only place a dash is used - the list screens show the cursor
+    // alone, since "which row is selected" is the only state they carry.
     formatCueLabel(cueLabel, sizeof(cueLabel), currentCue, currentCueName);
-    printLargeLine(cueLabel);
+    snprintf(buffer, sizeof(buffer), "-%s", cueLabel);
+    printLargeLine(buffer);
 
     formatCueLabel(cueLabel, sizeof(cueLabel), nextCue, nextCueName);
     snprintf(buffer, sizeof(buffer), ">%s", cueLabel);
@@ -480,7 +490,6 @@ void Display::showGuiValueEntry(
     snprintf(buffer, sizeof(buffer), "Field %d of %d", fieldIndex + 1, fieldCount);
     printLine(buffer);
 
-    printLine("Press=Next Hold=Back");
 
     endScreen();
 }

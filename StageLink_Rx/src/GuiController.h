@@ -1,42 +1,47 @@
 // FxQ GUI Architecture Prototype v0.1
-// Navigation-only prototype for FxQ's eventual production interface:
-// SHOW MODE (view the running show - see below), PROGRAM MODE (Show ->
-// Cue -> Action -> Output -> Command -> Value -> Cue Time), and SETUP
-// MODE (device configuration). PROGRAM MODE's show/cue/action data is
-// still fake and in-memory (there is no persistence, and editing it does
-// not yet change what Show Mode plays back) - but its Value Entry screen
-// now drives real hardware live, see below.
+// FxQ's operator interface: SHOW MODE (pick a show, then run it),
+// PROGRAM MODE (Show -> Cue -> Action -> Output -> Command -> Value) and
+// SETUP MODE (device configuration).
 //
-// SHOW MODE (Screen::ShowRun) is the one exception: it reads and drives
-// the real ShowEngine (see ShowEngine.h) rather than PROGRAM MODE's fake
-// data - rotate moves ShowEngine's selected cue (nextCue()/
-// previousCue()), a press GOes (go()) and then executes that cue's
-// actions against the real OutputManager (executeCurrentCue() - see
-// handlePress()'s Screen::ShowRun case).
+// Both modes read and write the real ShowEngine (see ShowEngine.h) -
+// there is no fake or duplicate show data here any more. Editing an
+// action in Program Mode changes the same cue Show Mode's GO plays back.
+// ShowEngine saves to flash shortly after editing stops, so programming
+// survives a power cycle (see ShowEngine::tick()).
 //
-// PROGRAM MODE's Value Entry is the other place real output happens: the
-// output catalog maps to real OutputManager channels, and every encoder
-// click applies the whole action being edited to the hardware
-// immediately (see previewCurrentEdit()), so a color or servo position
-// can be dialled in by eye. Where that action gets *stored* is still
-// fake - Program Mode writes to shows_[] here, not to ShowEngine, so a
-// GO in Show Mode won't replay it yet.
+// Show Mode enters on a show picker (Screen::ShowSelect) rather than
+// straight into the running show, so the operator chooses what they're
+// about to run; selecting one calls ShowEngine::selectShow() and drops
+// into Screen::ShowRun. Rotate there moves the selected cue
+// (nextCue()/previousCue()), a press GOes (go()) and executes that cue's
+// actions against the real OutputManager (executeCurrentCue()).
+//
+// Program Mode's Value Entry additionally applies the action being
+// edited to the outputs on every encoder click (see
+// previewCurrentEdit()), so a color or servo position can be dialled in
+// by eye instead of only being seen once the cue is GOne.
+//
+// One edited action here can be several ShowEngine actions: the engine
+// stores one Action per output *channel* (see Action.h), so an LED color
+// is four of them (R/G/B/Brightness) while a servo position is one. The
+// Action List groups consecutive actions that belong to the same output
+// back into one row - see uiActionInfo(). ActionEngine stays unaware of
+// any of this and keeps consuming a flat array.
 //
 // Input: rotate navigates or edits a value, a short press selects/
-// confirms/GOes, a hold goes back/cancels - same "hold = alternate
-// action" convention as StageLink_Common/src/LabelEditor.h. Every
-// screen behaves the same way for consistency.
+// confirms/GOes, and the dedicated Back button goes back or cancels one
+// step. Every screen behaves the same way for consistency.
 //
 // The existing diagnostic pages (Status/Diagnostics/Effect Test/Trigger
 // Status) are not touched or removed - Setup Mode's "Diagnostics" entry
 // hands control back to RX main.cpp's existing pageCycler system
 // unchanged (see the legacyModeCallback passed to begin()).
-// Belongs to: StageLink_Rx - the fake data and flow here are specific to
-// this prototype, not something TX or another RX-class device reuses.
+// Belongs to: StageLink_Rx.
 
 #pragma once
 
 #include <cstdint>
+#include "Action.h"
 #include "ActionEngine.h"
 #include "DeviceInfo.h"
 #include "LabelEditor.h"
@@ -48,19 +53,18 @@ class GuiController
 {
 public:
     // deviceInfo/labelEditor are RX main.cpp's existing objects, reused
-    // as-is for the Setup > Unit Label flow rather than duplicating
+    // as-is for the Setup > Controller Label flow rather than duplicating
     // label-editing logic here. commitUnitLabel is main.cpp's existing
     // commitUnitLabelEdit() (persists the edited label); enterLegacyMode
     // is called when the operator selects Setup > Diagnostics. radio is
     // read (never sent through) for Show Mode's signal indicator only.
-    // showEngine is RX main.cpp's ShowEngine instance - Show Mode reads
-    // its cue state to render and drives its navigation (go()/nextCue()/
-    // previousCue() - see handlePress()/handleRotate()'s Screen::ShowRun
-    // cases). outputManager is passed straight through to
-    // showEngine.executeCurrentCue() right after go() - GuiController
-    // itself never calls OutputManager::update() directly. enterUpdateMode
-    // is called when the operator selects Setup > Update Mode (see
-    // UpdateMode.h) - same shape as enterLegacyMode.
+    // showEngine is RX main.cpp's ShowEngine instance and the only place
+    // show data lives - both Show Mode and Program Mode go through it.
+    // outputManager is passed to showEngine's execute calls and used for
+    // Value Entry's live preview; GuiController never calls
+    // OutputManager::update() directly. enterUpdateMode is called when
+    // the operator selects Setup > Update Mode (see UpdateMode.h) - same
+    // shape as enterLegacyMode.
     void begin(
         StageLink::DeviceInfo &deviceInfo,
         StageLink::LabelEditor &labelEditor,
@@ -83,12 +87,11 @@ public:
     void handlePress();
 
     // Back/cancel, depending on the screen - from a root screen (Show
-    // Run/Show List/Setup List) this goes up to the Mode Menu; from the
-    // Mode Menu itself it does nothing (top of the hierarchy). Fired
-    // only by the dedicated Back button (GPIO27 - see main.cpp) - the
-    // encoder's own hold gesture no longer triggers this, now that a
-    // dedicated Back control exists.
-    void handleHold();
+    // Run/Show Select/Show List/Setup List) this goes up to the Mode
+    // Menu; from the Mode Menu itself it does nothing (top of the
+    // hierarchy). Fired by the dedicated Back button (GPIO27 - see
+    // main.cpp).
+    void handleBack();
 
     // Renders whatever screen is currently active. Call after any
     // handle*() that changed something, and on the normal periodic
@@ -98,17 +101,21 @@ public:
 private:
     enum class Screen : uint8_t
     {
+        ShowSelect, // Show Mode's picker - which show am I about to run
         ShowRun,
         ModeMenu,
-        ShowList,
+        ShowList,    // Program Mode's show list - which show am I editing
+        ShowOptions, // Edit / Rename / Copy / Delete for one show
         CueList,
+        CueOptions, // Edit / Move Up / Move Down / Delete for one cue
         ActionList,
+        ActionOptions, // Edit / Move Up / Move Down / Delete for one action
         OutputSelect,
         CommandSelect,
         ValueEntry,
-        CueTimeEntry,
         SetupList,
-        UnitLabelEdit
+        ControllerLabelEdit,
+        NameEdit // renaming a show or a cue - see renameTarget_
     };
 
     enum class OutputType : uint8_t
@@ -119,34 +126,27 @@ private:
         Relay
     };
 
-    struct Action
-    {
-        uint8_t outputIndex;
-        uint8_t commandIndex;
-        int values[5];
-        uint8_t valueCount;
-    };
-
-    static constexpr uint8_t MAX_SHOWS = 4;
-    static constexpr uint8_t MAX_CUES = 6;
-    static constexpr uint8_t MAX_ACTIONS = 4;
     static constexpr uint8_t MAX_STACK_DEPTH = 8;
-    static constexpr uint8_t MAX_VALUE_FIELDS = 5; // sizes editValues_ - the widest fieldsFor() list
-    static constexpr uint8_t LABEL_SIZE = 16; // fake-data labels only, unrelated to StageLink::Label
+    static constexpr uint8_t MAX_VALUE_FIELDS = 5;   // sizes editValues_ - the widest fieldsFor() list
+    static constexpr uint8_t MAX_STORED_ACTIONS = 4; // widest channelsFor() list - the LED's R/G/B/Brightness
+    static constexpr uint8_t MAX_OUTPUTS = 4;        // room for Stepper/Relay once Output Setup exists
+    static constexpr uint8_t LABEL_SIZE = 24; // one composed row, e.g. "Q01 Home Position"
 
-    struct Cue
-    {
-        char label[LABEL_SIZE];
-        Action actions[MAX_ACTIONS];
-        uint8_t actionCount;
-        float timeSeconds;
-    };
+    // Longest list any screen draws: one row per cue, or one per stored
+    // action (worst case every action a different output), plus up to two
+    // trailing entries on the action list.
+    static constexpr uint8_t MAX_LIST_ROWS =
+        ShowEngine::MAX_CUES > ShowEngine::MAX_ACTIONS_PER_CUE
+            ? ShowEngine::MAX_CUES
+            : ShowEngine::MAX_ACTIONS_PER_CUE;
+    static constexpr uint8_t MAX_TRAILING_ITEMS = 3; // + Add Action, + Add Cue, Done Programming
+    static constexpr uint8_t MAX_LIST_ITEMS = MAX_LIST_ROWS + MAX_TRAILING_ITEMS;
 
-    struct Show
+    // Which object Screen::NameEdit is currently renaming.
+    enum class RenameTarget : uint8_t
     {
-        char label[LABEL_SIZE];
-        Cue cues[MAX_CUES];
-        uint8_t cueCount;
+        Show,
+        Cue
     };
 
     struct StackFrame
@@ -160,41 +160,123 @@ private:
     Screen currentScreen() const;
     uint8_t &currentSelection();
 
-    void seedFakeData();
     OutputType outputTypeOf(uint8_t outputIndex) const;
     const char *const *commandsFor(OutputType type, uint8_t &count) const;
-    const char *const *fieldsFor(OutputType type, uint8_t &count) const;
+    // Which value fields an action has. Depends on the command, not just
+    // the output: an LED's "Color" is hue/white/brightness while its
+    // "RGB" is the four raw channels.
+    const char *const *fieldsFor(OutputType type, uint8_t commandIndex, uint8_t &count) const;
 
-    // OutputManager channels this output type's value fields drive, in
-    // the same order fieldsFor() returns them. nullptr for output types
-    // with no hardware behind them yet (Stepper/Relay).
-    const uint8_t *channelsFor(OutputType type) const;
+    // Every OutputManager channel this output type owns. Deliberately
+    // *not* parallel to fieldsFor(): the LED owns four channels but is
+    // edited as two fields (an 8-bit color plus brightness), so the
+    // mapping between them lives in buildActions()/loadValues() rather
+    // than being positional. nullptr for output types with no hardware
+    // behind them yet (Stepper/Relay).
+    const uint8_t *channelsFor(OutputType type, uint8_t &count) const;
 
-    // Highest value Value Entry lets the encoder reach for this output
-    // type - 180 for a servo's degrees, 255 for everything else.
-    int valueMaxFor(OutputType type) const;
+    // Converts the fields currently being edited into the stored actions
+    // that represent them, writing up to MAX_STORED_ACTIONS entries and
+    // returning how many. This is where one edited action becomes several
+    // engine actions - an LED color expands to red/green/blue.
+    uint8_t buildActions(OutputType type, Action *out) const;
+
+    // The reverse: reads a stored group of actions into
+    // loadedChannelValues_ so editing an existing action starts from its
+    // real values. Matches by channel, not position. Stops there rather
+    // than filling editValues_ - see populateEditFields().
+    void loadValues(OutputType type, const Action *actions, uint8_t start, uint8_t length);
+
+    // Turns loadedChannelValues_ into the edit fields for whichever
+    // command is now selected, or into sensible defaults for a new
+    // action. Called once the command is known, since the same stored
+    // action maps to different fields under Color than under RGB.
+    void populateEditFields();
+
+    // Which catalog output owns an OutputManager channel - the reverse of
+    // channelsFor(), used to group stored actions back into rows.
+    // Returns OUTPUT_NOT_FOUND for a channel no catalog entry claims.
+    static constexpr uint8_t OUTPUT_NOT_FOUND = 0xFF;
+    uint8_t outputIndexForChannel(uint8_t channel) const;
+
+    // Highest value Value Entry lets the encoder reach for a field - the
+    // hue step count for an LED hue, 180 for a servo's degrees, 255 for
+    // everything else.
+    int valueMaxForField(OutputType type, uint8_t commandIndex, uint8_t fieldIndex) const;
+
+    // How far one encoder click moves a field. Levels move in 5s to
+    // cross 0-255 in a sensible number of clicks; hue moves one step at a
+    // time, white and brightness in 8s (32 clicks end to end).
+    int stepForField(OutputType type, uint8_t commandIndex, uint8_t fieldIndex) const;
+
+    // Whether running off the end of a field comes back on the other side
+    // - true only for hue, which is a wheel.
+    bool fieldWraps(OutputType type, uint8_t commandIndex, uint8_t fieldIndex) const;
+
+    // Number of Action List rows for the cue being edited - stored
+    // actions grouped by output, not the raw action count.
+    uint8_t uiActionCount() const;
+
+    // Resolves Action List row uiIndex to the range of stored actions it
+    // covers. Returns false if the row doesn't exist.
+    bool uiActionInfo(uint8_t uiIndex, uint8_t &startOut, uint8_t &lengthOut, uint8_t &outputOut) const;
+
+    // Value stored for a specific OutputManager channel within a group of
+    // actions, or 0 if that channel isn't in the group. Matched by
+    // channel rather than by position, since a stored group needn't be
+    // written in field order - the test show sets LED brightness without
+    // setting red/green/blue at all.
+    static int32_t valueForChannel(
+        const Action *actions, uint8_t start, uint8_t length, uint8_t channel
+    );
 
     // Applies the action currently being edited to real hardware right
     // now, so Value Entry previews live instead of only taking effect
     // once the action is committed and its cue is GOne. Sends every value
     // field of the action (not just the one being edited) through
-    // ActionEngine - see the definition. Safe to call on any screen; a
-    // no-op if the selected output has no channels behind it.
+    // ActionEngine. Safe to call on any screen; a no-op if the selected
+    // output has no channels behind it.
     void previewCurrentEdit();
 
-    void beginActionFlow(bool editingExisting, uint8_t actionIndex);
+    // Opens the shared LabelEditor on a show or cue name and shows the
+    // name-entry screen. Committing writes back through ShowEngine, which
+    // clears that object's autoName flag.
+    void beginRename(RenameTarget target);
+    void commitRename();
+
+    // Rebuilds availableOutputs_ - the outputs Output Select may offer.
+    // Outputs already driven by another action in this cue are left out,
+    // enforcing one action per output per cue; the output belonging to
+    // the action being edited stays in the list so it can be kept.
+    void buildAvailableOutputs();
+
+    // Starts editing an Action List row, or a brand new action when
+    // length is 0 (start is then where it will be inserted).
+    void beginActionFlow(uint8_t start, uint8_t length);
+
+    // Writes the edited action back into ShowEngine, replacing whatever
+    // range beginActionFlow() opened, and returns to the Action List.
     void commitActionFlow();
 
     StackFrame stack_[MAX_STACK_DEPTH];
     uint8_t stackDepth_ = 0;
 
-    Show shows_[MAX_SHOWS];
-    uint8_t showCount_ = 0;
-
-    uint8_t currentShowIndex_ = 0;
+    // Which cue Program Mode is editing - an index into the selected
+    // show's cue list, not a cue number. The show itself is whatever
+    // ShowEngine has selected.
     uint8_t currentCueIndex_ = 0;
-    uint8_t currentActionIndex_ = 0;
-    bool editingExistingAction_ = false;
+
+    // Which show Program Mode's options screen is acting on. Separate
+    // from ShowEngine's selected show: opening the options for a show
+    // shouldn't load it until Edit is chosen.
+    uint8_t optionsShowIndex_ = 0;
+
+    RenameTarget renameTarget_ = RenameTarget::Show;
+
+    // Range of stored actions the open edit flow will replace on commit.
+    // editGroupLength_ 0 means "inserting a new action".
+    uint8_t editGroupStart_ = 0;
+    uint8_t editGroupLength_ = 0;
     uint8_t actionFlowReturnDepth_ = 0;
 
     uint8_t selectedOutputIndex_ = 0;
@@ -202,13 +284,24 @@ private:
     int editValues_[MAX_VALUE_FIELDS] = {};
     uint8_t editValueCount_ = 0;
     uint8_t editFieldIndex_ = 0;
-    float editCueTime_ = 1.0f;
 
-    // Scratch pointer buffer for whichever list render() is currently
-    // drawing - sized to the largest list this prototype ever shows
-    // (MAX_CUES + 1, the "+ Add Cue" list). Rebuilt fresh each render()
-    // call, never read across calls.
-    const char *itemPointers_[MAX_CUES + 2];
+    // Raw channel values of the action being edited, held between
+    // loadValues() and populateEditFields(). hasLoadedValues_ false means
+    // a new action, which starts from defaults instead.
+    int loadedChannelValues_[MAX_STORED_ACTIONS] = {};
+    bool hasLoadedValues_ = false;
+
+    // Catalog indices Output Select is currently offering, and how many.
+    // Rebuilt whenever an action edit begins - see buildAvailableOutputs().
+    uint8_t availableOutputs_[MAX_OUTPUTS] = {};
+    uint8_t availableOutputCount_ = 0;
+
+    // Backing storage for whichever list render() is currently drawing -
+    // itemPointers_ points into listLabels_ for rows that need a composed
+    // string (a cue's "Q01 Name", an action's value summary). Both are rebuilt fresh each render() call and
+    // never read across calls.
+    const char *itemPointers_[MAX_LIST_ITEMS];
+    char listLabels_[MAX_LIST_ITEMS][LABEL_SIZE];
 
     StageLink::DeviceInfo *deviceInfo_ = nullptr;
     StageLink::LabelEditor *labelEditor_ = nullptr;
@@ -221,6 +314,7 @@ private:
     // playback state for no benefit. ActionEngine is stateless, so a
     // second one costs nothing.
     ActionEngine previewEngine_;
+
     void (*commitUnitLabel_)() = nullptr;
     void (*enterLegacyMode_)() = nullptr;
     void (*enterUpdateMode_)() = nullptr;

@@ -1,27 +1,31 @@
 // StageLink RxQ ShowEngine
-// RxQ's show system: SHOW -> CUE -> ACTION[] -> ActionEngine ->
-// OutputManager. Tracks a show's cues (number/name/actions) and the
-// current/selected cue, and can execute the current cue's actions on
-// demand (executeCurrentCue()) by handing them to ActionEngine (see
-// ActionEngine.h) - ShowEngine itself no longer talks to OutputManager
-// directly, it only finds which cue is current and delegates. Still no
-// persistence, no cue editing, no fades/timing - an action is applied
-// immediately and only when explicitly executed.
+// RxQ's show system and the single place shows live: SHOW[] -> CUE ->
+// ACTION[] -> ActionEngine -> OutputManager. Holds every show on the
+// device, tracks which one is selected, tracks the current/selected cue
+// within it, and executes a cue's actions on demand
+// (executeCurrentCue()) by handing them to ActionEngine (see
+// ActionEngine.h) - ShowEngine itself never talks to OutputManager
+// directly, it only finds which actions to run and delegates.
 //
-// currentCue is the cue considered "already run" (what go() last
-// landed on, and what executeCurrentCue() acts on); selectedCue is what
+// Both the GUI's Show Mode and its Program Mode read and write through
+// here (see GuiController.h) - there is no second copy of show data
+// anywhere. Still no persistence: everything lives in RAM and is rebuilt
+// by loadTestShow() on each boot, so edits are lost on reset until flash
+// storage exists.
+//
+// currentCue is the cue considered "already run" (what go() last landed
+// on, and what executeCurrentCue() acts on); selectedCue is what
 // nextCue()/previousCue() move around and what go() will land on next.
 // Right after begin()/loadTestShow(), and after every home(),
 // selectedCue is currentCue + 1 - the natural "what to run next"
-// position. Deliberately not bounds-checked against getCueCount() yet
-// (selectedCue can exceed it, e.g. after go()-ing the last cue) - cue
-// navigation is pure state tracking, not validation against real cue
-// data.
+// position, clamped so it never points past the last programmed cue.
+// Navigation stops at both ends of the show rather than running into
+// cue numbers that don't exist.
 //
 // go()/nextCue()/previousCue()/home() never touch OutputManager
-// themselves - only executeCurrentCue() does, and only when a caller
-// (see StageLink_Rx/src/GuiController.cpp) explicitly calls it, e.g.
-// right after go(). Belongs to: StageLink_Rx.
+// themselves - only executeCurrentCue() and executeCue() do, and only
+// when a caller (see StageLink_Rx/src/GuiController.cpp) explicitly
+// calls one. Belongs to: StageLink_Rx.
 
 #pragma once
 
@@ -33,16 +37,78 @@
 class ShowEngine
 {
 public:
-    // Loads the hardcoded test show - see loadTestShow(). A future
-    // version will load a real stored show instead; kept as a separate
-    // call from loadTestShow() itself so that swap doesn't change
-    // begin()'s signature.
+    static constexpr uint8_t MAX_SHOWS = 4;
+    static constexpr uint8_t MAX_CUES = 8;
+
+    // A cue that sets a servo position plus a full LED color needs 5
+    // actions on its own (servo + R/G/B/brightness), so this has to be
+    // comfortably above the one-action-per-cue the first test show used.
+    static constexpr uint8_t MAX_ACTIONS_PER_CUE = 8;
+
+    static constexpr uint8_t SHOW_NAME_SIZE = 32;
+    static constexpr uint8_t CUE_NAME_SIZE = 24;
+
+    // Loads the saved show list from flash, or comes up empty if nothing
+    // is stored (a fresh unit, or firmware whose show layout has changed
+    // - see ShowStorage.h). A unit ships with no shows in firmware; the
+    // operator creates them in Program Mode.
     void begin();
 
-    // Hardcoded test show for this foundation phase: "Dragon Battle",
-    // 3 named cues, each with one LEVEL action on the servo output.
-    // Resets currentCue to 1 and selectedCue to 2.
+    // Call every loop(). Writes edits to flash once they have been quiet
+    // for AUTOSAVE_QUIET_MS, so a burst of encoder clicks costs one write
+    // instead of one per click. Does nothing when there is nothing to
+    // save.
+    void tick();
+
+    // Writes the show list to flash now, regardless of the autosave
+    // timer. Returns false if the write failed.
+    bool save();
+
+    // True when there are edits that have not reached flash yet - the
+    // display can use this to show a "saving" indicator.
+    bool hasUnsavedChanges() const;
+
+    // TEST DATA ONLY - not something a shipped unit ever calls. Replaces
+    // the whole show list with one demo show ("Dragon Battle", 3 cues
+    // that each drive both real outputs) so there's something to run and
+    // edit before show creation and persistence are finished. main.cpp
+    // calls this behind LOAD_TEST_SHOW_ON_BOOT; deleting that call is all
+    // that's needed to get shipping behavior.
     void loadTestShow();
+
+    // --- Show selection -------------------------------------------------
+    // Which show every cue/action call below refers to. Selecting a show
+    // resets cue position to the same "start of show" state loadTestShow()
+    // leaves behind, so switching shows never leaves a cue pointer from
+    // the previous show behind.
+    uint8_t getShowCount() const;
+    uint8_t getSelectedShowIndex() const;
+    void selectShow(uint8_t showIndex);
+
+    // Name of the selected show, or of showIndex specifically. The
+    // no-argument form is what Show Mode's display uses.
+    const char *getShowName() const;
+    const char *getShowName(uint8_t showIndex) const;
+
+    // Appends an empty show carrying the generated default name
+    // ("Show 01"), flagged autoName so it keeps following its position
+    // until the operator renames it. Returns false (and changes nothing)
+    // if MAX_SHOWS is already reached. Does not select it.
+    bool addShow();
+
+    // Gives a show a name of the operator's choosing, which stops it
+    // tracking its position - see the Show struct.
+    bool renameShow(uint8_t showIndex, const char *name);
+
+    // Duplicates a show, contents and all, onto the end of the list. The
+    // copy gets fresh internal ids throughout, so nothing references the
+    // original. Returns false if MAX_SHOWS is reached.
+    bool copyShow(uint8_t showIndex);
+
+    // Removes a show and everything in it.
+    bool removeShow(uint8_t showIndex);
+
+    // --- Cue navigation -------------------------------------------------
 
     // Selected cue becomes the current cue, then the selection advances
     // to current + 1 (same relationship as right after begin()) - no
@@ -53,54 +119,175 @@ public:
     // current cue - e.g. after navigating away to look at other cues.
     void home();
 
-    // Moves the selection forward/backward by one. previousCue() stops
-    // at 1 (never selects cue 0 or below); nextCue() has no upper bound
-    // here - see the class comment.
+    // Moves the selection forward/backward by one, stopping at the ends
+    // of the programmed cues: previousCue() never goes below 1, and
+    // nextCue() never goes past the last cue in the show.
     void nextCue();
     void previousCue();
 
-    const char *getShowName() const;
     uint8_t getCurrentCue() const;
     uint8_t getSelectedCue() const;
+
+    // Number of cues in the selected show.
     uint8_t getCueCount() const;
 
     // Name of cueNumber (1-based, matching getCurrentCue()/
     // getSelectedCue()), or an empty string if cueNumber isn't part of
-    // the loaded show.
+    // the selected show.
     const char *getCueName(uint8_t cueNumber) const;
 
-    // Finds the cue matching getCurrentCue() and hands its actions to
-    // ActionEngine::executeActions() (see ActionEngine.h) - no-op if the
-    // current cue has no actions or isn't found. Does not itself get
-    // called by go()/nextCue()/previousCue()/home() - a caller decides
-    // when to execute, typically right after go() (see
-    // GuiController.cpp). Signature unchanged from before ActionEngine
-    // existed, so existing callers don't need to change.
+    // --- Cue editing ----------------------------------------------------
+    // These address cues by 0-based *index* (position in the list), not
+    // by the 1-based cue number the navigation calls above use - the
+    // editor walks a list, so position is what it has to hand.
+
+    const char *getCueNameAt(uint8_t cueIndex) const;
+
+    // Appends an empty cue carrying the generated default name
+    // ("Cue 01"), flagged autoName. Returns false (and changes nothing)
+    // if MAX_CUES is reached.
+    bool addCue();
+
+    // Gives a cue a name of the operator's choosing, which stops it
+    // tracking its position - see the Cue struct.
+    bool renameCue(uint8_t cueIndex, const char *name);
+
+    // Duplicates a cue and its actions directly below the original, so
+    // the copy runs next. The copy gets a fresh internal id. Returns
+    // false if MAX_CUES is reached.
+    bool copyCue(uint8_t cueIndex);
+
+    // Removes a cue and everything in it. Remaining cues are renumbered
+    // so numbering stays 1..getCueCount() with no gaps - GO addresses
+    // cues by number, and a hole would leave a selectable cue that
+    // displays as blank.
+    bool removeCue(uint8_t cueIndex);
+
+    // Swaps the cue at firstIndex with the one after it, then renumbers
+    // both. Returns false if there is no cue after firstIndex.
+    bool swapAdjacentCues(uint8_t firstIndex);
+
+    // --- Action editing -------------------------------------------------
+    // Actions are stored flat, exactly as ActionEngine consumes them: one
+    // Action per output channel per cue. A single edit in the GUI can map
+    // to several of these (an LED color is four - see GuiController.h),
+    // which is why the write calls take a range rather than one Action.
+
+    uint8_t getActionCount(uint8_t cueIndex) const;
+
+    // Pointer to the cue's action array, or nullptr if cueIndex is out of
+    // range. Valid until the next call that edits this cue.
+    const Action *getActions(uint8_t cueIndex) const;
+
+    // Replaces removeCount actions starting at startIndex with the count
+    // actions in actions[]. Passing removeCount 0 inserts; passing a
+    // null/zero actions list deletes. Returns false and changes nothing
+    // if the result wouldn't fit or the range is invalid.
+    bool replaceActions(
+        uint8_t cueIndex,
+        uint8_t startIndex,
+        uint8_t removeCount,
+        const Action *actions,
+        uint8_t count
+    );
+
+    // Swaps two adjacent blocks of actions: the firstLength actions at
+    // firstStart, and the secondLength actions immediately after them.
+    // Blocks rather than single actions because one edited action can be
+    // several stored actions - see GuiController.h. Returns false and
+    // changes nothing if the two blocks don't fit inside the cue.
+    bool swapAdjacentActions(
+        uint8_t cueIndex, uint8_t firstStart, uint8_t firstLength, uint8_t secondLength
+    );
+
+    // --- Execution ------------------------------------------------------
+
+    // Finds the cue matching getCurrentCue() in the selected show and
+    // hands its actions to ActionEngine::executeActions() (see
+    // ActionEngine.h) - no-op if that cue has no actions or isn't found.
+    // Not called by go()/nextCue()/previousCue()/home() - a caller
+    // decides when to execute, typically right after go().
     void executeCurrentCue(StageLink::OutputManager &outputManager);
 
-private:
-    static constexpr uint8_t SHOW_NAME_SIZE = 32;
-    static constexpr uint8_t CUE_NAME_SIZE = 24;
-    static constexpr uint8_t MAX_CUES = 8; // headroom beyond the 3-cue test show; fixed-size, no dynamic memory
-    // A cue that sets a servo position plus a full LED color needs 5
-    // actions on its own (servo + R/G/B + brightness), so 4 is no longer
-    // enough now that the test show drives more than one output per cue.
-    static constexpr uint8_t MAX_ACTIONS_PER_CUE = 8;
+    // Same, for a cue addressed by index - used to audition a cue while
+    // editing it, without disturbing the current/selected cue state.
+    void executeCue(uint8_t cueIndex, StageLink::OutputManager &outputManager);
 
+private:
+    // Identity is the id; it is allocated once at creation and never
+    // changes, so moving or renumbering can't make a stored reference
+    // point at a different cue. The execution number (Q01, Q02...) is
+    // deliberately NOT stored - it is the cue's position in the list, so
+    // reordering and deleting can't leave numbering out of step with what
+    // actually runs.
+    //
+    // autoName tracks whether the name is still the generated default
+    // ("Cue 01"). While it is, the name follows the position; once the
+    // operator renames it, the name is theirs and moving never rewrites
+    // it. See refreshCueAutoNames().
     struct Cue
     {
-        uint8_t number;
+        uint16_t id;
         char name[CUE_NAME_SIZE];
+        bool autoName;
         Action actions[MAX_ACTIONS_PER_CUE];
         uint8_t actionCount;
     };
 
-    void setCue(uint8_t index, uint8_t number, const char *name);
-    void addAction(uint8_t cueIndex, uint8_t outputId, ActionCommand command, int32_t value);
+    // Same identity rules as Cue - see above. A show's displayed number
+    // is its position in the show list and isn't stored either.
+    struct Show
+    {
+        uint16_t id;
+        char name[SHOW_NAME_SIZE];
+        bool autoName;
+        Cue cues[MAX_CUES];
+        uint8_t cueCount;
+    };
 
-    char showName_[SHOW_NAME_SIZE] = {};
-    Cue cues_[MAX_CUES] = {};
-    uint8_t cueCount_ = 0;
+    // Rewrites the generated names of any cues/shows still on autoName,
+    // so defaults keep matching their position after an add, move,
+    // delete or copy. Renamed items are left alone.
+    // Records that the show list changed, restarting the autosave timer.
+    // Called by every operation that edits shows, cues or actions - an
+    // edit that forgets this stays in RAM and is lost on reset.
+    void markDirty();
+
+    void refreshCueAutoNames();
+    void refreshShowAutoNames();
+
+    // Highest cue number in the selected show, or 0 if it has no cues.
+    // Numbering is positional, so this is just the cue count.
+    uint8_t lastCueNumber() const;
+
+    // cueNumber held inside the programmed range - see nextCue()/go().
+    uint8_t clampCueNumber(uint8_t cueNumber) const;
+
+    Show *selectedShow();
+    const Show *selectedShow() const;
+    Cue *cueAt(uint8_t cueIndex);
+    const Cue *cueAt(uint8_t cueIndex) const;
+
+    void setCue(uint8_t showIndex, uint8_t index, uint8_t number, const char *name);
+    void addTestAction(uint8_t showIndex, uint8_t cueIndex, uint8_t outputId, ActionCommand command, int32_t value);
+
+    Show shows_[MAX_SHOWS] = {};
+    uint8_t showCount_ = 0;
+
+    // Monotonic - never reused, so an id freed by a delete can't come
+    // back attached to a different object.
+    uint16_t nextShowId_ = 1;
+    uint16_t nextCueId_ = 1;
+
+    // How long the edits have to stop before a save runs. Long enough
+    // that turning the encoder through a value is one write, short enough
+    // that pulling the power shortly after an edit still keeps it.
+    static constexpr uint32_t AUTOSAVE_QUIET_MS = 1500;
+
+    bool dirty_ = false;
+    uint32_t lastChangeMs_ = 0;
+    uint8_t selectedShowIndex_ = 0;
+
     uint8_t currentCue_ = 1;
     uint8_t selectedCue_ = 1;
     ActionEngine actionEngine_;

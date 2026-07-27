@@ -58,7 +58,10 @@ public:
     // space-padded to StageLink::LABEL_MAX_LENGTH), cursor is which
     // character rotating the encoder currently changes - see
     // StageLink_Common/src/LabelEditor.h.
-    static void showUnitLabelEdit(const char *buffer, uint8_t cursor);
+    // useBackButton picks which gesture the on-screen hint names: the
+    // GUI drives this screen from the dedicated Back button, while the
+    // legacy diagnostic pages still reach it by holding the local button.
+    static void showUnitLabelEdit(const char *buffer, uint8_t cursor, bool useBackButton = false);
 
     // Proof-of-concept page for EffectEngine/EffectStorage - shows
     // whether the test effect is currently playing, and whether it came

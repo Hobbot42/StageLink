@@ -1,10 +1,11 @@
 // StageLink LabelEditor
 // Generic encoder-driven fixed-size label text editor: rotate changes
 // the character at the cursor, a (short) press confirms it and advances,
-// a (long) hold steps back to re-edit the previous character - or, at
+// going back steps to re-edit the previous character - or, at
 // the first character, cancels the whole edit. Reuses the project's
-// existing successful "hold = alternate action" convention (see RX
-// main.cpp's LOCAL_BUTTON_HOLD_MS) rather than requiring a second
+// caller's own "go back one step" gesture - the GUI's dedicated Back
+// button, or the legacy diagnostic pages' button hold (see RX main.cpp's
+// LOCAL_BUTTON_HOLD_MS) - rather than requiring a second
 // physical control, since RX's local encoder only has one button.
 //
 // Purely an in-memory buffer + cursor state machine - it knows nothing
@@ -87,7 +88,7 @@ namespace StageLink
             return true;
         }
 
-        // Hold: steps back to re-edit the previous character. At the
+        // Back: steps back to re-edit the previous character. At the
         // first character, cancels the whole edit instead - isActive()
         // becomes false and wasCancelled() true, and the caller should
         // discard buffer() rather than saving it.

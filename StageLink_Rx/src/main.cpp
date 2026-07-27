@@ -103,6 +103,13 @@ constexpr unsigned long OUTPUT_REFRESH_INTERVAL_MS = 750;
 // hardware bring-up/testing without a show loaded.
 constexpr bool TX_TEST_OUTPUT_CONTROL_ENABLED = false;
 
+// Seeds ShowEngine with the "Dragon Battle" demo show (see
+// ShowEngine::loadTestShow()), but only on a unit with nothing saved -
+// saved shows are always left alone. Development convenience only: a
+// shipped unit boots with no shows in firmware and the operator creates
+// them in Program Mode. Set false to get that behavior.
+constexpr bool LOAD_TEST_SHOW_ON_BOOT = true;
+
 // RX's own local encoder (button only used for local page cycling - its
 // rotation is read for the diagnostics display but not transmitted).
 constexpr uint8_t ENCODER_CLK_PIN = 32;
@@ -283,7 +290,7 @@ void saveUnitLabel()
 void beginUnitLabelEdit()
 {
     unitLabelEditor.begin(localDeviceInfo.unitLabel);
-    Serial.println("Unit label edit: character 1");
+    Serial.println("Controller label edit: character 1");
 }
 
 // Called once unitLabelEditor.confirmChar() reports the last character
@@ -298,7 +305,7 @@ void commitUnitLabelEdit()
     StageLink::setLabelText(localDeviceInfo.unitLabel, StageLink::LABEL_BUFFER_SIZE, committed);
     saveUnitLabel();
 
-    Serial.print("Unit label saved: ");
+    Serial.print("Controller label saved: ");
     Serial.println(localDeviceInfo.unitLabel);
 }
 
@@ -674,7 +681,15 @@ void setup()
     // hardcoded test show and logs it. Called before guiController.begin()
     // below so Show Mode's first render already has real cue data to
     // read, not just a stored (but not yet populated) reference.
+    // begin() restores whatever was saved to flash. The demo show only
+    // seeds a unit that has nothing stored - without that check it would
+    // wipe the operator's saved shows on every boot.
     showEngine.begin();
+
+    if (LOAD_TEST_SHOW_ON_BOOT && showEngine.getShowCount() == 0)
+    {
+        showEngine.loadTestShow();
+    }
 
     // FxQ GUI Architecture Prototype v0.1 - see GuiController.h. Reuses
     // localDeviceInfo/unitLabelEditor/radio/outputManager and the
@@ -718,6 +733,21 @@ void loop()
     // this boot cycle (see enterUpdateMode() above).
     if (UpdateMode::isActive())
     {
+        // Back is the way out. Leaving goes through a reboot for the same
+        // reason entering does (see UpdateMode.h) - WiFi and ESP-NOW are
+        // mutually exclusive for a boot cycle, so there is no tearing one
+        // down in place. Anything unsaved is written first.
+        backButton.update();
+        if (backButton.consumePress())
+        {
+            if (showEngine.hasUnsavedChanges())
+            {
+                showEngine.save();
+            }
+
+            ESP.restart();
+        }
+
         UpdateMode::update();
         return;
     }
@@ -728,13 +758,18 @@ void loop()
     actionButton.update();
     ledOutputDevice.tick();
     servoOutputDevice.tick();
+
+    // Writes any programming changes to flash once editing has paused -
+    // see ShowEngine::tick(). Deliberately after the Update Mode early
+    // return above: an OTA reboot shouldn't race a save.
+    showEngine.tick();
     effectEngine.update();
 
     // Local encoder button: rotate/press, dispatched to whichever system
     // currently owns the display (see guiActive above). GUI mode uses
     // rotate=navigate, press=select/confirm/GO (see GuiController.h) -
     // the encoder's own hold gesture does nothing in GUI mode anymore,
-    // now that the dedicated Back button exists to drive handleHold().
+    // now that the dedicated Back button exists to drive handleBack().
     // Legacy mode keeps its original,
     // completely unchanged page-cycling/Unit-Label-editing/Effect-Test-
     // triggering behavior, hold included. This is purely local UI
@@ -784,13 +819,13 @@ void loop()
             showCurrentPage();
         }
 
-        // Dedicated Back button: the only way to fire handleHold() in
+        // Dedicated Back button: the only way to fire handleBack() in
         // GUI mode now - see GuiController.h. Goes up to the Mode Menu
         // from a root screen (Show Run/Show List/Setup List) and does
         // nothing from the Mode Menu itself.
         if (backButton.consumePress())
         {
-            guiController.handleHold();
+            guiController.handleBack();
             showCurrentPage();
         }
 
@@ -835,7 +870,7 @@ void loop()
                 unitLabelEditor.back();
                 if (!unitLabelEditor.isActive())
                 {
-                    Serial.println("Unit label edit cancelled");
+                    Serial.println("Controller label edit cancelled");
                 }
                 showCurrentPage();
                 localButtonHoldTriggered = true;
@@ -876,7 +911,7 @@ void loop()
                 unitLabelEditor.back();
                 if (!unitLabelEditor.isActive())
                 {
-                    Serial.println("Unit label edit cancelled");
+                    Serial.println("Controller label edit cancelled");
                 }
             }
             else
