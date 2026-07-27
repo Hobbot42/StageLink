@@ -58,3 +58,23 @@ void StageLink::ConfigManager::resetToDefaults()
 {
     preferences.clear();
 }
+
+size_t StageLink::ConfigManager::putBytes(const char *key, const void *value, size_t length)
+{
+    return preferences.putBytes(key, value, length);
+}
+
+size_t StageLink::ConfigManager::getBytes(const char *key, void *out, size_t maxLength)
+{
+    return preferences.getBytes(key, out, maxLength);
+}
+
+bool StageLink::ConfigManager::hasKey(const char *key)
+{
+    return preferences.isKey(key);
+}
+
+void StageLink::ConfigManager::removeKey(const char *key)
+{
+    preferences.remove(key);
+}

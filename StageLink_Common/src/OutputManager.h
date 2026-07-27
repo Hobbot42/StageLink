@@ -34,6 +34,14 @@ namespace StageLink
         // caller.
         bool update(uint8_t channel, int32_t value);
 
+        // Value most recently applied to a channel, or 0 for a channel
+        // that has never been driven or isn't registered. Lets a caller
+        // start an edit from where the output actually is rather than
+        // from an arbitrary default - see RX GuiController's
+        // populateEditFields(). Reflects what was commanded, which is the
+        // target a device eases toward, not its instantaneous position.
+        int32_t lastValue(uint8_t channel) const;
+
         // Calls refreshState() on every registered device - see
         // OutputDevice::refreshState(). Meant to be driven by a periodic
         // timer in application code (e.g. RX main.cpp), not every loop()
@@ -45,6 +53,7 @@ namespace StageLink
         struct Binding
         {
             uint8_t channel;
+            int32_t lastValue;
             OutputDevice *device;
         };
 

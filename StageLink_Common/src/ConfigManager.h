@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 // StageLink ConfigManager
@@ -26,6 +27,17 @@ namespace StageLink
 
         static bool getBool(const char *key, bool defaultValue);
         static void putBool(const char *key, bool value);
+
+        // Blob access, for data too big or too structured to store as
+        // one scalar per field - see RX ShowStorage, which keeps a whole
+        // show under a single key. Returns the number of bytes actually
+        // written/read, so a caller can tell a short or missing record
+        // from a complete one.
+        static size_t putBytes(const char *key, const void *value, size_t length);
+        static size_t getBytes(const char *key, void *out, size_t maxLength);
+
+        static bool hasKey(const char *key);
+        static void removeKey(const char *key);
 
         // Erases all stored settings for this board. Callers fall back to
         // their own hardcoded defaults on the next read afterward.
