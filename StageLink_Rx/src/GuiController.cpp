@@ -6,10 +6,24 @@
 
 namespace
 {
-    // Fake output catalog - see GuiController.h class comment. Index
-    // here is what Action::outputIndex refers to throughout.
-    constexpr const char *OUTPUT_LABELS[] = { "LED 1", "Servo 1", "Servo 2", "Stepper 1", "Relay 1" };
-    constexpr uint8_t OUTPUT_COUNT = 5;
+    // Output catalog - index here is what Action::outputIndex refers to
+    // throughout. Only the outputs this board actually drives are listed,
+    // so Value Entry's live preview (see previewCurrentEdit()) always has
+    // real hardware behind it. Stepper/Relay stay in OutputType for when
+    // Setup > Output Setup can define outputs properly - at that point
+    // this hardcoded catalog is what it replaces. Deliberately not named
+    // OUT-01/OUT-02 yet: the physical numbering is Output Setup's to
+    // assign, and guessing it here would bake in a wrong mapping.
+    constexpr const char *OUTPUT_LABELS[] = { "LED", "SERVO" };
+    constexpr uint8_t OUTPUT_COUNT = 2;
+
+    // OutputManager channel each value field drives, in the same order as
+    // the matching *_FIELDS array below. Must match RX main.cpp's
+    // OUTPUT_CHANNEL_* constants - that file's anonymous namespace isn't
+    // reachable from here, so this is kept in sync by hand, exactly like
+    // ShowEngine.cpp's TEST_SHOW_*_OUTPUT_ID constants.
+    constexpr uint8_t LED_CHANNELS[] = { 3, 4, 5, 2 }; // RED, GREEN, BLUE, BRIGHTNESS
+    constexpr uint8_t SERVO_CHANNELS[] = { 1 };        // POSITION
 
     constexpr const char *LED_COMMANDS[] = { "Color", "Brightness", "Fade", "Effect" };
     constexpr const char *SERVO_COMMANDS[] = { "Position", "Fade" };
@@ -19,7 +33,10 @@ namespace
     // Grouped by output type rather than by individual command - keeps
     // this prototype's value-entry screens simple (see GuiController.h);
     // a real implementation would likely vary fields per command too.
-    constexpr const char *LED_FIELDS[] = { "RED", "GREEN", "BLUE", "WHITE", "BRIGHTNESS" };
+    // No WHITE field - LEDOutput drives R/G/B/Brightness only (see
+    // LEDOutput.h, "no white channel" in its class comment), so offering
+    // one would be a control that does nothing.
+    constexpr const char *LED_FIELDS[] = { "RED", "GREEN", "BLUE", "BRIGHTNESS" };
     constexpr const char *SERVO_FIELDS[] = { "POSITION" };
     constexpr const char *STEPPER_FIELDS[] = { "VALUE" };
 
@@ -101,17 +118,16 @@ void GuiController::seedFakeData()
     }
 
     GuiController::Action &a1 = dragon.cues[1].actions[dragon.cues[1].actionCount++];
-    a1.outputIndex = 0; // LED 1
+    a1.outputIndex = 0; // LED
     a1.commandIndex = 0; // Color
-    a1.values[0] = 255;
-    a1.values[1] = 0;
-    a1.values[2] = 0;
-    a1.values[3] = 0;
-    a1.values[4] = 255;
-    a1.valueCount = 5;
+    a1.values[0] = 255;  // RED
+    a1.values[1] = 0;    // GREEN
+    a1.values[2] = 0;    // BLUE
+    a1.values[3] = 255;  // BRIGHTNESS
+    a1.valueCount = 4;
 
     GuiController::Action &a2 = dragon.cues[3].actions[dragon.cues[3].actionCount++];
-    a2.outputIndex = 1; // Servo 1
+    a2.outputIndex = 1; // SERVO
     a2.commandIndex = 0; // Position
     a2.values[0] = 90;
     a2.valueCount = 1;
@@ -135,15 +151,74 @@ GuiController::OutputType GuiController::outputTypeOf(uint8_t outputIndex) const
     switch (outputIndex)
     {
         case 0:
-            return OutputType::Led; // LED 1
-        case 1:
-        case 2:
-            return OutputType::Servo; // Servo 1/2
-        case 3:
-            return OutputType::Stepper; // Stepper 1
+            return OutputType::Led;
         default:
-            return OutputType::Relay; // Relay 1
+            return OutputType::Servo;
     }
+}
+
+const uint8_t *GuiController::channelsFor(OutputType type) const
+{
+    switch (type)
+    {
+        case OutputType::Led:
+            return LED_CHANNELS;
+        case OutputType::Servo:
+            return SERVO_CHANNELS;
+        default:
+            return nullptr; // Stepper/Relay - no hardware behind them yet
+    }
+}
+
+int GuiController::valueMaxFor(OutputType type) const
+{
+    // ServoOutput clamps to its own configured min/max anyway (see
+    // ServoOutput.cpp), but stopping the encoder at 180 keeps Value
+    // Entry from scrolling through 75 values that all look identical.
+    return type == OutputType::Servo ? 180 : 255;
+}
+
+void GuiController::previewCurrentEdit()
+{
+    if (outputManager_ == nullptr)
+    {
+        return;
+    }
+
+    const OutputType type = outputTypeOf(selectedOutputIndex_);
+
+    uint8_t fieldCount = 0;
+    fieldsFor(type, fieldCount);
+
+    const uint8_t *channels = channelsFor(type);
+    if (channels == nullptr || fieldCount == 0)
+    {
+        return;
+    }
+
+    // Every field is sent, not just the one being edited - a color only
+    // reads correctly on the strip when R/G/B/Brightness all arrive
+    // together. This is the same UI-action-becomes-several-engine-actions
+    // expansion that committing an action uses.
+    //
+    // Which command is selected doesn't change what's previewed yet:
+    // fields are grouped by output type, not per command (see fieldsFor()),
+    // and ActionEngine only implements Level regardless.
+    ::Action preview[MAX_VALUE_FIELDS];
+    uint8_t previewCount = 0;
+
+    for (uint8_t i = 0; i < fieldCount && i < MAX_VALUE_FIELDS; ++i)
+    {
+        preview[previewCount].outputId = channels[i];
+        preview[previewCount].command = ActionCommand::Level;
+        preview[previewCount].value = editValues_[i];
+        previewCount++;
+    }
+
+    // Goes through ActionEngine rather than OutputManager directly, so
+    // editing drives hardware over exactly the same path GO does - see
+    // ActionEngine.h on being reusable outside ShowEngine.
+    previewEngine_.executeActions(preview, previewCount, *outputManager_);
 }
 
 const char *const *GuiController::commandsFor(OutputType type, uint8_t &count) const
@@ -328,7 +403,15 @@ void GuiController::handleRotate(int direction)
         }
 
         case Screen::ValueEntry:
-            editValues_[editFieldIndex_] = constrain(editValues_[editFieldIndex_] + step * 5, 0, 255);
+            editValues_[editFieldIndex_] = constrain(
+                editValues_[editFieldIndex_] + step * 5,
+                0,
+                valueMaxFor(outputTypeOf(selectedOutputIndex_))
+            );
+            // Live preview - the operator sees the light/servo land on the
+            // value while turning the encoder, rather than only after
+            // committing the action and GOing the cue.
+            previewCurrentEdit();
             break;
 
         case Screen::CueTimeEntry:
@@ -460,6 +543,9 @@ void GuiController::handlePress()
             else
             {
                 pushScreen(Screen::ValueEntry);
+                // Show the starting values on the hardware immediately, so
+                // the first encoder click isn't the first visible change.
+                previewCurrentEdit();
             }
             break;
         }

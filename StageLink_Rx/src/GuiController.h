@@ -3,18 +3,24 @@
 // SHOW MODE (view the running show - see below), PROGRAM MODE (Show ->
 // Cue -> Action -> Output -> Command -> Value -> Cue Time), and SETUP
 // MODE (device configuration). PROGRAM MODE's show/cue/action data is
-// still fake and in-memory (there is no persistence, and nothing there
-// touches real output) - the point of this phase is only to test
-// whether the navigation depth and flow feel right.
+// still fake and in-memory (there is no persistence, and editing it does
+// not yet change what Show Mode plays back) - but its Value Entry screen
+// now drives real hardware live, see below.
 //
 // SHOW MODE (Screen::ShowRun) is the one exception: it reads and drives
 // the real ShowEngine (see ShowEngine.h) rather than PROGRAM MODE's fake
 // data - rotate moves ShowEngine's selected cue (nextCue()/
 // previousCue()), a press GOes (go()) and then executes that cue's
 // actions against the real OutputManager (executeCurrentCue() - see
-// handlePress()'s Screen::ShowRun case). PROGRAM MODE's Action editing
-// is still entirely fake/unconnected - only Show Mode's GO is wired to
-// real output so far.
+// handlePress()'s Screen::ShowRun case).
+//
+// PROGRAM MODE's Value Entry is the other place real output happens: the
+// output catalog maps to real OutputManager channels, and every encoder
+// click applies the whole action being edited to the hardware
+// immediately (see previewCurrentEdit()), so a color or servo position
+// can be dialled in by eye. Where that action gets *stored* is still
+// fake - Program Mode writes to shows_[] here, not to ShowEngine, so a
+// GO in Show Mode won't replay it yet.
 //
 // Input: rotate navigates or edits a value, a short press selects/
 // confirms/GOes, a hold goes back/cancels - same "hold = alternate
@@ -31,6 +37,7 @@
 #pragma once
 
 #include <cstdint>
+#include "ActionEngine.h"
 #include "DeviceInfo.h"
 #include "LabelEditor.h"
 #include "ReliableRadio.h"
@@ -124,6 +131,7 @@ private:
     static constexpr uint8_t MAX_CUES = 6;
     static constexpr uint8_t MAX_ACTIONS = 4;
     static constexpr uint8_t MAX_STACK_DEPTH = 8;
+    static constexpr uint8_t MAX_VALUE_FIELDS = 5; // sizes editValues_ - the widest fieldsFor() list
     static constexpr uint8_t LABEL_SIZE = 16; // fake-data labels only, unrelated to StageLink::Label
 
     struct Cue
@@ -157,6 +165,23 @@ private:
     const char *const *commandsFor(OutputType type, uint8_t &count) const;
     const char *const *fieldsFor(OutputType type, uint8_t &count) const;
 
+    // OutputManager channels this output type's value fields drive, in
+    // the same order fieldsFor() returns them. nullptr for output types
+    // with no hardware behind them yet (Stepper/Relay).
+    const uint8_t *channelsFor(OutputType type) const;
+
+    // Highest value Value Entry lets the encoder reach for this output
+    // type - 180 for a servo's degrees, 255 for everything else.
+    int valueMaxFor(OutputType type) const;
+
+    // Applies the action currently being edited to real hardware right
+    // now, so Value Entry previews live instead of only taking effect
+    // once the action is committed and its cue is GOne. Sends every value
+    // field of the action (not just the one being edited) through
+    // ActionEngine - see the definition. Safe to call on any screen; a
+    // no-op if the selected output has no channels behind it.
+    void previewCurrentEdit();
+
     void beginActionFlow(bool editingExisting, uint8_t actionIndex);
     void commitActionFlow();
 
@@ -174,7 +199,7 @@ private:
 
     uint8_t selectedOutputIndex_ = 0;
     uint8_t selectedCommandIndex_ = 0;
-    int editValues_[5] = {};
+    int editValues_[MAX_VALUE_FIELDS] = {};
     uint8_t editValueCount_ = 0;
     uint8_t editFieldIndex_ = 0;
     float editCueTime_ = 1.0f;
@@ -190,6 +215,12 @@ private:
     StageLink::ReliableRadio *radio_ = nullptr;
     StageLink::OutputManager *outputManager_ = nullptr;
     ShowEngine *showEngine_ = nullptr;
+
+    // Used only by previewCurrentEdit() - ShowEngine has its own instance
+    // for cue playback, and reaching into it would couple the editor to
+    // playback state for no benefit. ActionEngine is stateless, so a
+    // second one costs nothing.
+    ActionEngine previewEngine_;
     void (*commitUnitLabel_)() = nullptr;
     void (*enterLegacyMode_)() = nullptr;
     void (*enterUpdateMode_)() = nullptr;
