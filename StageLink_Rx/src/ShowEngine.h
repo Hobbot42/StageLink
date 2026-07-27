@@ -82,7 +82,10 @@ private:
     static constexpr uint8_t SHOW_NAME_SIZE = 32;
     static constexpr uint8_t CUE_NAME_SIZE = 24;
     static constexpr uint8_t MAX_CUES = 8; // headroom beyond the 3-cue test show; fixed-size, no dynamic memory
-    static constexpr uint8_t MAX_ACTIONS_PER_CUE = 4; // headroom beyond the 1-action-per-cue test show
+    // A cue that sets a servo position plus a full LED color needs 5
+    // actions on its own (servo + R/G/B + brightness), so 4 is no longer
+    // enough now that the test show drives more than one output per cue.
+    static constexpr uint8_t MAX_ACTIONS_PER_CUE = 8;
 
     struct Cue
     {

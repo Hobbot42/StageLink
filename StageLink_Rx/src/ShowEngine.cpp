@@ -10,6 +10,10 @@ namespace
     // anonymous namespace isn't reachable from here, so this is kept in
     // sync by hand for this first version).
     constexpr uint8_t TEST_SHOW_SERVO_OUTPUT_ID = 1;
+    constexpr uint8_t TEST_SHOW_LED_BRIGHTNESS_OUTPUT_ID = 2;
+    constexpr uint8_t TEST_SHOW_LED_RED_OUTPUT_ID = 3;
+    constexpr uint8_t TEST_SHOW_LED_GREEN_OUTPUT_ID = 4;
+    constexpr uint8_t TEST_SHOW_LED_BLUE_OUTPUT_ID = 5;
 }
 
 void ShowEngine::begin()
@@ -67,14 +71,30 @@ void ShowEngine::loadTestShow()
 
     cueCount_ = 3;
 
+    // Each cue drives both real outputs (servo + LED) so a single GO
+    // exercises the whole multi-action path: ShowEngine hands the entire
+    // action list to ActionEngine, which applies every entry in order.
+    // The LED's red/green/blue all default to 255 (see LEDOutput.h), so
+    // a cue that wants a specific color has to set all three - it can't
+    // just raise the one it cares about.
+
     setCue(0, 1, "Home Position");
     addAction(0, TEST_SHOW_SERVO_OUTPUT_ID, ActionCommand::Level, 0);
+    addAction(0, TEST_SHOW_LED_BRIGHTNESS_OUTPUT_ID, ActionCommand::Level, 0);
 
     setCue(1, 2, "Wake Up");
     addAction(1, TEST_SHOW_SERVO_OUTPUT_ID, ActionCommand::Level, 90);
+    addAction(1, TEST_SHOW_LED_RED_OUTPUT_ID, ActionCommand::Level, 0);
+    addAction(1, TEST_SHOW_LED_GREEN_OUTPUT_ID, ActionCommand::Level, 255);
+    addAction(1, TEST_SHOW_LED_BLUE_OUTPUT_ID, ActionCommand::Level, 0);
+    addAction(1, TEST_SHOW_LED_BRIGHTNESS_OUTPUT_ID, ActionCommand::Level, 120);
 
     setCue(2, 3, "Roar");
     addAction(2, TEST_SHOW_SERVO_OUTPUT_ID, ActionCommand::Level, 180);
+    addAction(2, TEST_SHOW_LED_RED_OUTPUT_ID, ActionCommand::Level, 255);
+    addAction(2, TEST_SHOW_LED_GREEN_OUTPUT_ID, ActionCommand::Level, 0);
+    addAction(2, TEST_SHOW_LED_BLUE_OUTPUT_ID, ActionCommand::Level, 0);
+    addAction(2, TEST_SHOW_LED_BRIGHTNESS_OUTPUT_ID, ActionCommand::Level, 255);
 
     currentCue_ = 1;
     selectedCue_ = currentCue_ + 1;
