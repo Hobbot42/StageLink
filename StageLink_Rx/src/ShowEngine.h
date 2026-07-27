@@ -48,17 +48,22 @@ public:
     static constexpr uint8_t SHOW_NAME_SIZE = 32;
     static constexpr uint8_t CUE_NAME_SIZE = 24;
 
+    // 0 to 99.9 seconds, held in tenths - see Cue::fadeTenths.
+    static constexpr uint16_t MAX_FADE_TENTHS = 999;
+
     // Loads the saved show list from flash, or comes up empty if nothing
     // is stored (a fresh unit, or firmware whose show layout has changed
     // - see ShowStorage.h). A unit ships with no shows in firmware; the
     // operator creates them in Program Mode.
     void begin();
 
-    // Call every loop(). Writes edits to flash once they have been quiet
-    // for AUTOSAVE_QUIET_MS, so a burst of encoder clicks costs one write
-    // instead of one per click. Does nothing when there is nothing to
-    // save.
-    void tick();
+    // Call every loop(). Advances any cue fade in progress, and writes
+    // edits to flash once they have been quiet for AUTOSAVE_QUIET_MS, so
+    // a burst of encoder clicks costs one write instead of one per click.
+    void tick(StageLink::OutputManager &outputManager);
+
+    // True while a cue is still fading in - see ActionEngine::isFading().
+    bool isFading() const;
 
     // Writes the show list to flash now, regardless of the autosave
     // timer. Returns false if the write failed.
@@ -142,6 +147,11 @@ public:
     // editor walks a list, so position is what it has to hand.
 
     const char *getCueNameAt(uint8_t cueIndex) const;
+
+    // How long this cue takes to reach its values when GOne, in tenths of
+    // a second. 0 is an instant snap.
+    uint16_t getCueFadeTenths(uint8_t cueIndex) const;
+    bool setCueFadeTenths(uint8_t cueIndex, uint16_t tenths);
 
     // Appends an empty cue carrying the generated default name
     // ("Cue 01"), flagged autoName. Returns false (and changes nothing)
@@ -230,6 +240,12 @@ private:
         uint16_t id;
         char name[CUE_NAME_SIZE];
         bool autoName;
+
+        // Fade time in tenths of a second (0-999, so 0 to 99.9s). Tenths
+        // rather than milliseconds because that is the resolution the
+        // operator actually sets, and it keeps the stored cue small.
+        // 0 means snap, which is how every cue behaved before fading.
+        uint16_t fadeTenths;
         Action actions[MAX_ACTIONS_PER_CUE];
         uint8_t actionCount;
     };

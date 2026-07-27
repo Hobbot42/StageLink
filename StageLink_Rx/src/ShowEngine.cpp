@@ -88,8 +88,17 @@ bool ShowEngine::save()
     return saved;
 }
 
-void ShowEngine::tick()
+bool ShowEngine::isFading() const
 {
+    return actionEngine_.isFading();
+}
+
+void ShowEngine::tick(StageLink::OutputManager &outputManager)
+{
+    // Fades first - they need advancing every loop regardless of whether
+    // anything is waiting to be saved.
+    actionEngine_.tick(outputManager);
+
     if (!dirty_)
     {
         return;
@@ -157,6 +166,7 @@ void ShowEngine::setCue(uint8_t showIndex, uint8_t index, uint8_t number, const 
     snprintf(cue.name, CUE_NAME_SIZE, "%s", name);
     cue.autoName = false; // the test show's cues are deliberately named
     cue.actionCount = 0;
+    cue.fadeTenths = 0;
     (void)number;         // position is the number now - see ShowEngine.h
 }
 
@@ -201,6 +211,7 @@ void ShowEngine::loadTestShow()
     addTestAction(showCount_, 0, TEST_SHOW_LED_BRIGHTNESS_OUTPUT_ID, ActionCommand::Level, 0);
 
     setCue(showCount_, 1, 2, "Wake Up");
+    shows_[showCount_].cues[1].fadeTenths = 30; // 3.0s - test data, see loadTestShow()
     addTestAction(showCount_, 1, TEST_SHOW_SERVO_OUTPUT_ID, ActionCommand::Level, 90);
     addTestAction(showCount_, 1, TEST_SHOW_LED_RED_OUTPUT_ID, ActionCommand::Level, 0);
     addTestAction(showCount_, 1, TEST_SHOW_LED_GREEN_OUTPUT_ID, ActionCommand::Level, 255);
@@ -208,6 +219,7 @@ void ShowEngine::loadTestShow()
     addTestAction(showCount_, 1, TEST_SHOW_LED_BRIGHTNESS_OUTPUT_ID, ActionCommand::Level, 120);
 
     setCue(showCount_, 2, 3, "Roar");
+    shows_[showCount_].cues[2].fadeTenths = 5; // 0.5s - test data
     addTestAction(showCount_, 2, TEST_SHOW_SERVO_OUTPUT_ID, ActionCommand::Level, 180);
     addTestAction(showCount_, 2, TEST_SHOW_LED_RED_OUTPUT_ID, ActionCommand::Level, 255);
     addTestAction(showCount_, 2, TEST_SHOW_LED_GREEN_OUTPUT_ID, ActionCommand::Level, 0);
@@ -450,6 +462,26 @@ const char *ShowEngine::getCueNameAt(uint8_t cueIndex) const
     return cue == nullptr ? "" : cue->name;
 }
 
+uint16_t ShowEngine::getCueFadeTenths(uint8_t cueIndex) const
+{
+    const Cue *cue = cueAt(cueIndex);
+    return cue == nullptr ? 0 : cue->fadeTenths;
+}
+
+bool ShowEngine::setCueFadeTenths(uint8_t cueIndex, uint16_t tenths)
+{
+    Cue *cue = cueAt(cueIndex);
+    if (cue == nullptr)
+    {
+        return false;
+    }
+
+    cue->fadeTenths = tenths > MAX_FADE_TENTHS ? MAX_FADE_TENTHS : tenths;
+    markDirty();
+
+    return true;
+}
+
 bool ShowEngine::addCue()
 {
     Show *show = selectedShow();
@@ -462,6 +494,7 @@ bool ShowEngine::addCue()
     cue.id = nextCueId_++;
     cue.autoName = true;
     cue.actionCount = 0;
+    cue.fadeTenths = 0; // snap unless the operator sets a fade
     show->cueCount++;
 
     refreshCueAutoNames();
@@ -729,5 +762,10 @@ void ShowEngine::executeCue(uint8_t cueIndex, StageLink::OutputManager &outputMa
         return;
     }
 
-    actionEngine_.executeActions(cue->actions, cue->actionCount, outputManager);
+    // Tenths to milliseconds. 0 stays 0, which ActionEngine treats as an
+    // immediate set rather than a zero-length ramp.
+    actionEngine_.executeActions(
+        cue->actions, cue->actionCount, outputManager,
+        static_cast<uint32_t>(cue->fadeTenths) * 100
+    );
 }

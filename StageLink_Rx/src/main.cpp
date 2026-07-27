@@ -762,7 +762,7 @@ void loop()
     // Writes any programming changes to flash once editing has paused -
     // see ShowEngine::tick(). Deliberately after the Update Mode early
     // return above: an OTA reboot shouldn't race a save.
-    showEngine.tick();
+    showEngine.tick(outputManager);
     effectEngine.update();
 
     // Local encoder button: rotate/press, dispatched to whichever system

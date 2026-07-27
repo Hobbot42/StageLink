@@ -188,15 +188,23 @@ namespace
     // "Edit" opens the cue's action list, which is what pressing the cue
     // used to do directly.
     constexpr const char *CUE_OPTIONS[] = {
-        "Edit", "Rename", "Copy", "Move Up", "Move Down", "Delete"
+        "Edit", "Rename", "Fade Time", "Copy", "Move Up", "Move Down", "Delete"
     };
     constexpr uint8_t CUE_OPTION_COUNT = itemCount(CUE_OPTIONS);
     constexpr uint8_t CUE_OPTION_EDIT = 0;
     constexpr uint8_t CUE_OPTION_RENAME = 1;
-    constexpr uint8_t CUE_OPTION_COPY = 2;
-    constexpr uint8_t CUE_OPTION_MOVE_UP = 3;
-    constexpr uint8_t CUE_OPTION_MOVE_DOWN = 4;
-    constexpr uint8_t CUE_OPTION_DELETE = 5;
+    constexpr uint8_t CUE_OPTION_FADE = 2;
+    constexpr uint8_t CUE_OPTION_COPY = 3;
+    constexpr uint8_t CUE_OPTION_MOVE_UP = 4;
+    constexpr uint8_t CUE_OPTION_MOVE_DOWN = 5;
+    constexpr uint8_t CUE_OPTION_DELETE = 6;
+
+    // Encoder step for the cue fade, in tenths of a second. 0.1s steps
+    // stay precise where fades are usually set, but 99.9s would be 999
+    // clicks away - so past 10s it moves a second at a time.
+    constexpr uint16_t FADE_FINE_LIMIT_TENTHS = 100; // 10.0s
+    constexpr int FADE_FINE_STEP = 1;                // 0.1s
+    constexpr int FADE_COARSE_STEP = 10;             // 1.0s
 
     // A show has no ordering operations - shows aren't executed in
     // sequence, so Move Up/Down would order nothing.
@@ -868,6 +876,18 @@ void GuiController::handleRotate(int direction)
             currentSelection() = wrapIndex(currentSelection(), step, CUE_OPTION_COUNT);
             break;
 
+        case Screen::CueFadeEntry:
+        {
+            const int fadeStep = editFadeTenths_ >= FADE_FINE_LIMIT_TENTHS
+                                     ? FADE_COARSE_STEP
+                                     : FADE_FINE_STEP;
+            const int moved = static_cast<int>(editFadeTenths_) + step * fadeStep;
+            editFadeTenths_ = static_cast<uint16_t>(
+                constrain(moved, 0, static_cast<int>(ShowEngine::MAX_FADE_TENTHS))
+            );
+            break;
+        }
+
         case Screen::ActionList:
             // Actions, then "+ Add Action", "+ Add Cue", "Done Programming".
             currentSelection() = wrapIndex(currentSelection(), step, uiActionCount() + 3);
@@ -1072,6 +1092,13 @@ void GuiController::handlePress()
             if (option == CUE_OPTION_RENAME)
             {
                 beginRename(RenameTarget::Cue);
+                break;
+            }
+
+            if (option == CUE_OPTION_FADE)
+            {
+                editFadeTenths_ = showEngine_->getCueFadeTenths(currentCueIndex_);
+                pushScreen(Screen::CueFadeEntry);
                 break;
             }
 
@@ -1605,11 +1632,44 @@ void GuiController::render()
             break;
 
         case Screen::CueOptions:
+        {
+            for (uint8_t i = 0; i < CUE_OPTION_COUNT && i < MAX_LIST_ITEMS; ++i)
+            {
+                itemPointers_[i] = CUE_OPTIONS[i];
+            }
+
+            // Fade Time carries its current value, so the cue's timing is
+            // readable without opening the screen to check it.
+            const uint16_t fadeTenths = showEngine_->getCueFadeTenths(currentCueIndex_);
+            snprintf(
+                listLabels_[CUE_OPTION_FADE], LABEL_SIZE, "%s %u.%us",
+                CUE_OPTIONS[CUE_OPTION_FADE],
+                static_cast<unsigned>(fadeTenths / 10),
+                static_cast<unsigned>(fadeTenths % 10)
+            );
+            itemPointers_[CUE_OPTION_FADE] = listLabels_[CUE_OPTION_FADE];
+
             Display::showGuiList(
                 "CUE", showEngine_->getCueNameAt(currentCueIndex_),
-                CUE_OPTIONS, CUE_OPTION_COUNT, currentSelection()
+                itemPointers_, CUE_OPTION_COUNT, currentSelection()
             );
             break;
+        }
+
+        case Screen::CueFadeEntry:
+        {
+            char valueText[12];
+            snprintf(
+                valueText, sizeof(valueText), "%u.%u sec",
+                static_cast<unsigned>(editFadeTenths_ / 10),
+                static_cast<unsigned>(editFadeTenths_ % 10)
+            );
+            Display::showGuiValueEntry(
+                "CUE FADE", showEngine_->getCueNameAt(currentCueIndex_),
+                "TIME", valueText, 0, 1
+            );
+            break;
+        }
 
         case Screen::ActionOptions:
             Display::showGuiList(

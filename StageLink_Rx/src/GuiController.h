@@ -107,7 +107,8 @@ private:
         ShowList,    // Program Mode's show list - which show am I editing
         ShowOptions, // Edit / Rename / Copy / Delete for one show
         CueList,
-        CueOptions, // Edit / Move Up / Move Down / Delete for one cue
+        CueOptions,   // Edit / Rename / Fade Time / Copy / Move / Delete
+        CueFadeEntry, // how long the cue takes to reach its values on GO
         ActionList,
         ActionOptions, // Edit / Move Up / Move Down / Delete for one action
         OutputSelect,
@@ -272,6 +273,11 @@ private:
     uint8_t optionsShowIndex_ = 0;
 
     RenameTarget renameTarget_ = RenameTarget::Show;
+
+    // Cue fade being dialled in, in tenths of a second. Held here rather
+    // than written straight through, so backing out of the screen leaves
+    // the stored cue alone.
+    uint16_t editFadeTenths_ = 0;
 
     // Range of stored actions the open edit flow will replace on commit.
     // editGroupLength_ 0 means "inserting a new action".

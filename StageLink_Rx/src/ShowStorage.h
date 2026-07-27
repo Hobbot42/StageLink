@@ -30,7 +30,7 @@ namespace StageLink
     public:
         // Bump whenever the stored show/cue/action layout changes. See
         // the file comment for what a mismatch does.
-        static constexpr uint16_t LAYOUT_VERSION = 1;
+        static constexpr uint16_t LAYOUT_VERSION = 2;
 
         // Writes showCount records of recordSize bytes each, plus the
         // version/size/count header used to validate them on load.
