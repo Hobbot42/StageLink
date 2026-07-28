@@ -21,7 +21,7 @@ public:
     // Must be called every loop() while isActive() is true, in place of
     // the normal loop() body (see main.cpp) - pumps ArduinoOTA.handle(),
     // refreshes the OLED with connection/IP status, and reboots via
-    // ESP.restart() if 2 minutes pass with no OTA flash actually
+    // ESP.restart() if 10 minutes pass with no OTA flash actually
     // starting (see ArduinoOTA's onStart callback in UpdateMode.cpp).
     static void update();
 

@@ -14,7 +14,13 @@ namespace
     // rebooting mid-retry. Not enforced once a flash is in progress (see
     // State::Flashing below) - a slow upload should never itself trigger
     // a reboot.
-    constexpr unsigned long TIMEOUT_MS = 120000; // 2 minutes
+    // 10 minutes. Two was far too tight in practice: entering Update
+    // Mode, reading the IP off the OLED and getting a build uploaded
+    // routinely outran it, and a timeout means walking back to the
+    // controller to start over rather than just retrying the upload.
+    // Generous is the right default - nothing is harmed by sitting in
+    // Update Mode, and the operator can leave with Back at any time.
+    constexpr unsigned long TIMEOUT_MS = 600000;
     constexpr unsigned long DISPLAY_REFRESH_INTERVAL_MS = 500;
 
     enum class State
@@ -87,6 +93,16 @@ void UpdateMode::begin()
     deadlineStart = millis();
 
     WiFi.mode(WIFI_STA);
+
+    // Modem sleep off. The ESP32 defaults to WIFI_PS_MIN_MODEM in station
+    // mode, waking only on the AP's beacon - which pushed round-trip
+    // times on this network from milliseconds into whole seconds, and an
+    // OTA transfer does not survive that (it died at random points part
+    // way through). Update Mode is a foreground activity on mains power
+    // with nothing else to do, so responsiveness beats power here; normal
+    // operation never brings WiFi up at all.
+    WiFi.setSleep(false);
+
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
     ArduinoOTA.setHostname("stagelink-rx");
