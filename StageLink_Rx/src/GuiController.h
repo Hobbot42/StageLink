@@ -46,6 +46,7 @@
 #include "DeviceInfo.h"
 #include "LabelEditor.h"
 #include "ReliableRadio.h"
+#include "OutputCatalog.h"
 #include "OutputManager.h"
 #include "ShowEngine.h"
 
@@ -71,6 +72,7 @@ public:
         StageLink::ReliableRadio &radio,
         StageLink::OutputManager &outputManager,
         ShowEngine &showEngine,
+        StageLink::OutputCatalog &outputCatalog,
         void (*commitUnitLabel)(),
         void (*enterLegacyMode)(),
         void (*enterUpdateMode)()
@@ -115,17 +117,15 @@ private:
         CommandSelect,
         ValueEntry,
         SetupList,
+        OutputList,    // Setup > Output Setup - every output on the controller
+        OutputOptions, // Rename (type is reported by the catalog, not chosen)
         ControllerLabelEdit,
         NameEdit // renaming a show or a cue - see renameTarget_
     };
 
-    enum class OutputType : uint8_t
-    {
-        Led,
-        Servo,
-        Stepper,
-        Relay
-    };
+    // What an output is, as declared by the catalog - there is no second
+    // definition here to drift from it.
+    using OutputType = StageLink::OutputCatalog::Type;
 
     static constexpr uint8_t MAX_STACK_DEPTH = 8;
     static constexpr uint8_t MAX_VALUE_FIELDS = 5;   // sizes editValues_ - the widest fieldsFor() list
@@ -147,7 +147,8 @@ private:
     enum class RenameTarget : uint8_t
     {
         Show,
-        Cue
+        Cue,
+        Output
     };
 
     struct StackFrame
@@ -168,25 +169,25 @@ private:
     // "RGB" is the four raw channels.
     const char *const *fieldsFor(OutputType type, uint8_t commandIndex, uint8_t &count) const;
 
-    // Every OutputManager channel this output type owns. Deliberately
-    // *not* parallel to fieldsFor(): the LED owns four channels but is
-    // edited as two fields (an 8-bit color plus brightness), so the
-    // mapping between them lives in buildActions()/loadValues() rather
-    // than being positional. nullptr for output types with no hardware
-    // behind them yet (Stepper/Relay).
-    const uint8_t *channelsFor(OutputType type, uint8_t &count) const;
+    // Every OutputManager channel a catalog output owns. Keyed by output
+    // rather than by type, so two outputs of the same type each get their
+    // own channels. Deliberately *not* parallel to fieldsFor(): an LED
+    // owns four channels but is edited as two fields (color plus
+    // brightness), so the mapping between them lives in buildActions()/
+    // loadValues() rather than being positional.
+    const uint8_t *channelsForOutput(uint8_t outputIndex, uint8_t &count) const;
 
     // Converts the fields currently being edited into the stored actions
     // that represent them, writing up to MAX_STORED_ACTIONS entries and
     // returning how many. This is where one edited action becomes several
     // engine actions - an LED color expands to red/green/blue.
-    uint8_t buildActions(OutputType type, Action *out) const;
+    uint8_t buildActions(uint8_t outputIndex, Action *out) const;
 
     // The reverse: reads a stored group of actions into
     // loadedChannelValues_ so editing an existing action starts from its
     // real values. Matches by channel, not position. Stops there rather
     // than filling editValues_ - see populateEditFields().
-    void loadValues(OutputType type, const Action *actions, uint8_t start, uint8_t length);
+    void loadValues(uint8_t outputIndex, const Action *actions, uint8_t start, uint8_t length);
 
     // Turns loadedChannelValues_ into the edit fields for whichever
     // command is now selected, or into sensible defaults for a new
@@ -197,7 +198,7 @@ private:
     // Which catalog output owns an OutputManager channel - the reverse of
     // channelsFor(), used to group stored actions back into rows.
     // Returns OUTPUT_NOT_FOUND for a channel no catalog entry claims.
-    static constexpr uint8_t OUTPUT_NOT_FOUND = 0xFF;
+    static constexpr uint8_t OUTPUT_NOT_FOUND = StageLink::OutputCatalog::NOT_FOUND;
     uint8_t outputIndexForChannel(uint8_t channel) const;
 
     // Highest value Value Entry lets the encoder reach for a field - the
@@ -272,6 +273,9 @@ private:
     // shouldn't load it until Edit is chosen.
     uint8_t optionsShowIndex_ = 0;
 
+    // Which output Setup > Output Setup is acting on.
+    uint8_t optionsOutputIndex_ = 0;
+
     RenameTarget renameTarget_ = RenameTarget::Show;
 
     // Cue fade being dialled in, in tenths of a second. Held here rather
@@ -314,6 +318,7 @@ private:
     StageLink::ReliableRadio *radio_ = nullptr;
     StageLink::OutputManager *outputManager_ = nullptr;
     ShowEngine *showEngine_ = nullptr;
+    StageLink::OutputCatalog *outputCatalog_ = nullptr;
 
     // Used only by previewCurrentEdit() - ShowEngine has its own instance
     // for cue playback, and reaching into it would couple the editor to

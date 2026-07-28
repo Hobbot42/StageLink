@@ -47,6 +47,7 @@
 #include "LabelEditor.h"
 #include "GuiController.h"
 #include "UiButton.h"
+#include "OutputCatalog.h"
 #include "ShowEngine.h"
 #include "UpdateMode.h"
 #include "OutputList.h"
@@ -201,6 +202,7 @@ LinkState linkState = LinkState::WaitingForLink;
 StageLink::StatusPageCycler pageCycler;
 StageLink::ReliableRadio radio;
 StageLink::OutputManager outputManager;
+StageLink::OutputCatalog outputCatalog;
 StageLink::EffectEngine effectEngine;
 StageLink::TriggerManager triggerManager;
 ServoOutput servoOutputDevice(SERVO_PIN);
@@ -652,6 +654,29 @@ void setup()
     outputManager.registerDevice(OUTPUT_CHANNEL_LED_GREEN, &ledGreenProxy);
     outputManager.registerDevice(OUTPUT_CHANNEL_LED_BLUE, &ledBlueProxy);
 
+    // The outputs a cue can program, declared here beside the devices they
+    // drive so the wiring is stated once (see OutputCatalog.h). Channel
+    // order matters: it is the order that output type's value fields
+    // expect, which for an LED is red, green, blue, brightness.
+    outputCatalog.begin();
+
+    {
+        constexpr uint8_t servoChannels[] = { OUTPUT_CHANNEL_SERVO };
+        outputCatalog.addOutput(
+            StageLink::OutputCatalog::Type::Servo, servoChannels, 1, "Servo"
+        );
+
+        constexpr uint8_t ledChannels[] = {
+            OUTPUT_CHANNEL_LED_RED,
+            OUTPUT_CHANNEL_LED_GREEN,
+            OUTPUT_CHANNEL_LED_BLUE,
+            OUTPUT_CHANNEL_LED_BRIGHTNESS,
+        };
+        outputCatalog.addOutput(
+            StageLink::OutputCatalog::Type::Led, ledChannels, 4, "LED"
+        );
+    }
+
     effectEngine.begin(outputManager);
     StageLink::EffectStorage::begin();
 
@@ -697,7 +722,10 @@ void setup()
     // duplicating any of that logic. showEngine feeds Show Mode's
     // display and, via outputManager, GO's action execution - see
     // GuiController.h.
-    guiController.begin(localDeviceInfo, unitLabelEditor, radio, outputManager, showEngine, commitUnitLabelEdit, enterLegacyMode, enterUpdateMode);
+    guiController.begin(
+        localDeviceInfo, unitLabelEditor, radio, outputManager, showEngine, outputCatalog,
+        commitUnitLabelEdit, enterLegacyMode, enterUpdateMode
+    );
 
     displayReady = Display::begin();
     if (!displayReady)

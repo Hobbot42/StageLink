@@ -16,24 +16,10 @@ namespace
         return static_cast<uint8_t>(N);
     }
 
-    // Output catalog - index here is what selectedOutputIndex_ refers to
-    // throughout. Only the outputs this board actually drives are listed,
-    // so Value Entry's live preview always has real hardware behind it.
-    // Stepper/Relay stay in OutputType for when Setup > Output Setup can
-    // define outputs properly - at that point this hardcoded catalog is
-    // what it replaces. Deliberately not named OUT-01/OUT-02 yet: the
-    // physical numbering is Output Setup's to assign, and guessing it
-    // here would bake in a wrong mapping.
-    constexpr const char *OUTPUT_LABELS[] = { "LED", "SERVO" };
-    constexpr uint8_t OUTPUT_COUNT = itemCount(OUTPUT_LABELS);
-
-    // OutputManager channel each value field drives, in the same order as
-    // the matching *_FIELDS array below. Must match RX main.cpp's
-    // OUTPUT_CHANNEL_* constants - that file's anonymous namespace isn't
-    // reachable from here, so this is kept in sync by hand, exactly like
-    // ShowEngine.cpp's TEST_SHOW_*_OUTPUT_ID constants.
-    constexpr uint8_t LED_CHANNELS[] = { 3, 4, 5, 2 }; // RED, GREEN, BLUE, BRIGHTNESS
-    constexpr uint8_t SERVO_CHANNELS[] = { 1 };        // POSITION
+    // The output catalog used to be hardcoded here and kept in step with
+    // main.cpp's OUTPUT_CHANNEL_* constants by hand. It now comes from
+    // OutputCatalog, which main.cpp fills in beside the devices it
+    // registers - names, types and channels all from one place.
 
     // Two ways to set the same LED: the color picker (hue/white/
     // brightness, one dial at a time) or raw RGB channels. They write
@@ -70,7 +56,8 @@ namespace
     constexpr const char *SERVO_FIELDS[] = { "POSITION" };
     constexpr const char *STEPPER_FIELDS[] = { "VALUE" };
 
-    // Channel positions within LED_CHANNELS.
+    // Channel positions within an LED output's channel list, in the
+    // order main.cpp declares them to the catalog.
     constexpr uint8_t LED_CHANNEL_RED = 0;
     constexpr uint8_t LED_CHANNEL_GREEN = 1;
     constexpr uint8_t LED_CHANNEL_BLUE = 2;
@@ -168,7 +155,18 @@ namespace
     }
 
     constexpr const char *MODE_MENU_ITEMS[] = { "Show Mode", "Program Mode", "Setup Mode" };
-    constexpr const char *SETUP_ITEMS[] = { "Controller Label", "Diagnostics", "Update Mode" };
+    constexpr const char *SETUP_ITEMS[] = {
+        "Controller Label", "Output Setup", "Diagnostics", "Update Mode"
+    };
+    constexpr uint8_t SETUP_ITEM_CONTROLLER_LABEL = 0;
+    constexpr uint8_t SETUP_ITEM_OUTPUT_SETUP = 1;
+    constexpr uint8_t SETUP_ITEM_DIAGNOSTICS = 2;
+
+    // Only renaming for now. An output's type is what main.cpp actually
+    // registered on those channels, so offering to change it here would
+    // let the operator describe the hardware wrongly - see OutputCatalog.h.
+    constexpr const char *OUTPUT_OPTIONS[] = { "Rename" };
+    constexpr uint8_t OUTPUT_OPTION_COUNT = itemCount(OUTPUT_OPTIONS);
 
     // Shown in place of a list that has nothing in it yet - a unit ships
     // with no shows, so an empty Show Mode picker is a normal state, not
@@ -239,6 +237,7 @@ void GuiController::begin(
     StageLink::ReliableRadio &radio,
     StageLink::OutputManager &outputManager,
     ShowEngine &showEngine,
+    StageLink::OutputCatalog &outputCatalog,
     void (*commitUnitLabel)(),
     void (*enterLegacyMode)(),
     void (*enterUpdateMode)()
@@ -249,6 +248,7 @@ void GuiController::begin(
     radio_ = &radio;
     outputManager_ = &outputManager;
     showEngine_ = &showEngine;
+    outputCatalog_ = &outputCatalog;
     commitUnitLabel_ = commitUnitLabel;
     enterLegacyMode_ = enterLegacyMode;
     enterUpdateMode_ = enterUpdateMode;
@@ -274,59 +274,25 @@ void GuiController::begin(
 
 GuiController::OutputType GuiController::outputTypeOf(uint8_t outputIndex) const
 {
-    switch (outputIndex)
-    {
-        case 0:
-            return OutputType::Led;
-        default:
-            return OutputType::Servo;
-    }
+    return outputCatalog_->getType(outputIndex);
 }
 
-const uint8_t *GuiController::channelsFor(OutputType type, uint8_t &count) const
+const uint8_t *GuiController::channelsForOutput(uint8_t outputIndex, uint8_t &count) const
 {
-    switch (type)
-    {
-        case OutputType::Led:
-            count = 4;
-            return LED_CHANNELS;
-        case OutputType::Servo:
-            count = 1;
-            return SERVO_CHANNELS;
-        default:
-            count = 0;
-            return nullptr; // Stepper/Relay - no hardware behind them yet
-    }
+    return outputCatalog_->getChannels(outputIndex, count);
 }
 
 uint8_t GuiController::outputIndexForChannel(uint8_t channel) const
 {
-    for (uint8_t outputIndex = 0; outputIndex < OUTPUT_COUNT; ++outputIndex)
-    {
-        uint8_t channelCount = 0;
-        const uint8_t *channels = channelsFor(outputTypeOf(outputIndex), channelCount);
-
-        if (channels == nullptr)
-        {
-            continue;
-        }
-
-        for (uint8_t i = 0; i < channelCount; ++i)
-        {
-            if (channels[i] == channel)
-            {
-                return outputIndex;
-            }
-        }
-    }
-
-    return OUTPUT_NOT_FOUND;
+    return outputCatalog_->indexForChannel(channel);
 }
 
-uint8_t GuiController::buildActions(OutputType type, Action *out) const
+uint8_t GuiController::buildActions(uint8_t outputIndex, Action *out) const
 {
+    const OutputType type = outputTypeOf(outputIndex);
+
     uint8_t channelCount = 0;
-    const uint8_t *channels = channelsFor(type, channelCount);
+    const uint8_t *channels = channelsForOutput(outputIndex, channelCount);
 
     if (channels == nullptr)
     {
@@ -390,11 +356,11 @@ uint8_t GuiController::buildActions(OutputType type, Action *out) const
 }
 
 void GuiController::loadValues(
-    OutputType type, const Action *actions, uint8_t start, uint8_t length
+    uint8_t outputIndex, const Action *actions, uint8_t start, uint8_t length
 )
 {
     uint8_t channelCount = 0;
-    const uint8_t *channels = channelsFor(type, channelCount);
+    const uint8_t *channels = channelsForOutput(outputIndex, channelCount);
 
     if (channels == nullptr)
     {
@@ -430,7 +396,7 @@ void GuiController::populateEditFields()
         // so opening Value Entry doesn't jump the rig to an arbitrary
         // default before the operator has touched anything.
         uint8_t channelCount = 0;
-        const uint8_t *channels = channelsFor(type, channelCount);
+        const uint8_t *channels = channelsForOutput(selectedOutputIndex_, channelCount);
 
         for (uint8_t i = 0; i < channelCount && i < MAX_STORED_ACTIONS; ++i)
         {
@@ -682,7 +648,7 @@ void GuiController::previewCurrentEdit()
     // fields are grouped by output type, not per command (see
     // fieldsFor()), and ActionEngine only implements Level regardless.
     Action preview[MAX_STORED_ACTIONS];
-    const uint8_t previewCount = buildActions(outputTypeOf(selectedOutputIndex_), preview);
+    const uint8_t previewCount = buildActions(selectedOutputIndex_, preview);
 
     if (previewCount == 0)
     {
@@ -699,24 +665,39 @@ void GuiController::beginRename(RenameTarget target)
 {
     renameTarget_ = target;
 
-    labelEditor_->begin(
-        target == RenameTarget::Show
-            ? showEngine_->getShowName(optionsShowIndex_)
-            : showEngine_->getCueNameAt(currentCueIndex_)
-    );
+    const char *current = "";
+    switch (target)
+    {
+        case RenameTarget::Show:
+            current = showEngine_->getShowName(optionsShowIndex_);
+            break;
+        case RenameTarget::Cue:
+            current = showEngine_->getCueNameAt(currentCueIndex_);
+            break;
+        case RenameTarget::Output:
+            current = outputCatalog_->getName(optionsOutputIndex_);
+            break;
+    }
+
+    labelEditor_->begin(current);
 
     pushScreen(Screen::NameEdit);
 }
 
 void GuiController::commitRename()
 {
-    if (renameTarget_ == RenameTarget::Show)
+    switch (renameTarget_)
     {
-        showEngine_->renameShow(optionsShowIndex_, labelEditor_->buffer());
-    }
-    else
-    {
-        showEngine_->renameCue(currentCueIndex_, labelEditor_->buffer());
+        case RenameTarget::Show:
+            showEngine_->renameShow(optionsShowIndex_, labelEditor_->buffer());
+            break;
+        case RenameTarget::Cue:
+            showEngine_->renameCue(currentCueIndex_, labelEditor_->buffer());
+            break;
+        case RenameTarget::Output:
+            // Saved immediately by the catalog - see OutputCatalog::rename().
+            outputCatalog_->rename(optionsOutputIndex_, labelEditor_->buffer());
+            break;
     }
 }
 
@@ -724,7 +705,7 @@ void GuiController::buildAvailableOutputs()
 {
     availableOutputCount_ = 0;
 
-    for (uint8_t output = 0; output < OUTPUT_COUNT && output < MAX_OUTPUTS; ++output)
+    for (uint8_t output = 0; output < outputCatalog_->getCount() && output < MAX_OUTPUTS; ++output)
     {
         bool taken = false;
 
@@ -771,7 +752,7 @@ void GuiController::beginActionFlow(uint8_t start, uint8_t length)
             selectedOutputIndex_ = output;
         }
 
-        loadValues(outputTypeOf(selectedOutputIndex_), actions, start, length);
+        loadValues(selectedOutputIndex_, actions, start, length);
     }
     else
     {
@@ -807,7 +788,7 @@ void GuiController::commitActionFlow()
     // expansion described in GuiController.h. ActionEngine never sees the
     // grouping, only the flat result.
     Action actions[MAX_STORED_ACTIONS];
-    const uint8_t count = buildActions(outputTypeOf(selectedOutputIndex_), actions);
+    const uint8_t count = buildActions(selectedOutputIndex_, actions);
 
     if (count > 0)
     {
@@ -934,7 +915,15 @@ void GuiController::handleRotate(int direction)
         }
 
         case Screen::SetupList:
-            currentSelection() = wrapIndex(currentSelection(), step, 3);
+            currentSelection() = wrapIndex(currentSelection(), step, itemCount(SETUP_ITEMS));
+            break;
+
+        case Screen::OutputList:
+            currentSelection() = wrapIndex(currentSelection(), step, outputCatalog_->getCount());
+            break;
+
+        case Screen::OutputOptions:
+            currentSelection() = wrapIndex(currentSelection(), step, OUTPUT_OPTION_COUNT);
             break;
 
         case Screen::ControllerLabelEdit:
@@ -1386,12 +1375,16 @@ void GuiController::handlePress()
             break;
 
         case Screen::SetupList:
-            if (currentSelection() == 0) // Controller Label
+            if (currentSelection() == SETUP_ITEM_CONTROLLER_LABEL)
             {
                 labelEditor_->begin(deviceInfo_->unitLabel);
                 pushScreen(Screen::ControllerLabelEdit);
             }
-            else if (currentSelection() == 1) // Diagnostics
+            else if (currentSelection() == SETUP_ITEM_OUTPUT_SETUP)
+            {
+                pushScreen(Screen::OutputList);
+            }
+            else if (currentSelection() == SETUP_ITEM_DIAGNOSTICS)
             {
                 if (enterLegacyMode_ != nullptr)
                 {
@@ -1402,6 +1395,19 @@ void GuiController::handlePress()
             {
                 enterUpdateMode_();
             }
+            break;
+
+        case Screen::OutputList:
+            if (outputCatalog_->getCount() > 0)
+            {
+                optionsOutputIndex_ = currentSelection();
+                pushScreen(Screen::OutputOptions);
+            }
+            break;
+
+        case Screen::OutputOptions:
+            // Rename is the only entry - see OUTPUT_OPTIONS.
+            beginRename(RenameTarget::Output);
             break;
 
         case Screen::ControllerLabelEdit:
@@ -1602,30 +1608,36 @@ void GuiController::render()
                     // operator thinks of it, rather than the raw r/g/b
                     // channels underneath. Degrees rather than the step
                     // index so the number means something on its own.
+                    uint8_t ledChannelCount = 0;
+                    const uint8_t *ledChannels = channelsForOutput(output, ledChannelCount);
+
                     int hueDegrees = 0;
                     int saturation = 0;
                     rgbToHueSaturation(
-                        valueForChannel(actions, start, length, LED_CHANNELS[LED_CHANNEL_RED]),
-                        valueForChannel(actions, start, length, LED_CHANNELS[LED_CHANNEL_GREEN]),
-                        valueForChannel(actions, start, length, LED_CHANNELS[LED_CHANNEL_BLUE]),
+                        valueForChannel(actions, start, length, ledChannels[LED_CHANNEL_RED]),
+                        valueForChannel(actions, start, length, ledChannels[LED_CHANNEL_GREEN]),
+                        valueForChannel(actions, start, length, ledChannels[LED_CHANNEL_BLUE]),
                         hueDegrees, saturation
                     );
 
+                    // The operator's name for the output, not a fixed
+                    // "LED" - that is the point of the catalog.
                     snprintf(
-                        listLabels_[count], LABEL_SIZE, "LED %dd B%d",
+                        listLabels_[count], LABEL_SIZE, "%s %dd B%d",
+                        outputCatalog_->getName(output),
                         hueDegrees,
                         static_cast<int>(
-                            valueForChannel(actions, start, length, LED_CHANNELS[LED_CHANNEL_BRIGHTNESS])
+                            valueForChannel(actions, start, length, ledChannels[LED_CHANNEL_BRIGHTNESS])
                         )
                     );
                 }
                 else if (output != OUTPUT_NOT_FOUND)
                 {
                     uint8_t channelCount = 0;
-                    const uint8_t *channels = channelsFor(outputTypeOf(output), channelCount);
+                    const uint8_t *channels = channelsForOutput(output, channelCount);
                     snprintf(
                         listLabels_[count], LABEL_SIZE, "%s %d",
-                        OUTPUT_LABELS[output],
+                        outputCatalog_->getName(output),
                         static_cast<int>(
                             channels == nullptr
                                 ? actions[start].value
@@ -1727,7 +1739,7 @@ void GuiController::render()
 
             for (uint8_t i = 0; i < availableOutputCount_; ++i)
             {
-                itemPointers_[i] = OUTPUT_LABELS[availableOutputs_[i]];
+                itemPointers_[i] = outputCatalog_->getName(availableOutputs_[i]);
             }
 
             Display::showGuiList(
@@ -1741,7 +1753,7 @@ void GuiController::render()
             uint8_t count = 0;
             const char *const *commands = commandsFor(outputTypeOf(selectedOutputIndex_), count);
             Display::showGuiList(
-                "COMMAND", OUTPUT_LABELS[selectedOutputIndex_], commands, count, currentSelection()
+                "COMMAND", outputCatalog_->getName(selectedOutputIndex_), commands, count, currentSelection()
             );
             break;
         }
@@ -1759,7 +1771,7 @@ void GuiController::render()
             char context[24];
             snprintf(
                 context, sizeof(context), "%s/%s",
-                OUTPUT_LABELS[selectedOutputIndex_], commands[selectedCommandIndex_]
+                outputCatalog_->getName(selectedOutputIndex_), commands[selectedCommandIndex_]
             );
 
             // Hue reads in degrees rather than as its step index - 0/120/
@@ -1786,6 +1798,33 @@ void GuiController::render()
 
         case Screen::SetupList:
             Display::showGuiList("SETUP", nullptr, SETUP_ITEMS, itemCount(SETUP_ITEMS), currentSelection());
+            break;
+
+        case Screen::OutputList:
+        {
+            const uint8_t outputCount = outputCatalog_->getCount();
+
+            for (uint8_t i = 0; i < outputCount && i < MAX_LIST_ITEMS; ++i)
+            {
+                // Type alongside the name, so what an output physically is
+                // stays visible even once it is called "Dragon Head".
+                snprintf(
+                    listLabels_[i], LABEL_SIZE, "%s %s",
+                    StageLink::OutputCatalog::typeName(outputCatalog_->getType(i)),
+                    outputCatalog_->getName(i)
+                );
+                itemPointers_[i] = listLabels_[i];
+            }
+
+            Display::showGuiList("OUTPUTS", nullptr, itemPointers_, outputCount, currentSelection());
+            break;
+        }
+
+        case Screen::OutputOptions:
+            Display::showGuiList(
+                "OUTPUT", outputCatalog_->getName(optionsOutputIndex_),
+                OUTPUT_OPTIONS, OUTPUT_OPTION_COUNT, currentSelection()
+            );
             break;
 
         case Screen::ControllerLabelEdit:
