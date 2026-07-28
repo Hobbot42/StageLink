@@ -266,3 +266,54 @@ Level
 Placeholder:
 
 Color
+
+
+# RxQ Roadmap (working list)
+
+Ordered as agreed. Items marked TBD were deferred, not rejected.
+
+1. **Capacity** - more shows, cues and actions per cue. DONE.
+2. **Per-action delay and fade.** A cue has a fade time, which moves
+   everything together. Delay is what staggers a sequence. The ramp
+   machinery already exists in ActionEngine, so this is adding per-action
+   timing on top of it, not building timing from scratch.
+3. **Auto-follow / manual hold / loop.** Needs a design session first -
+   it changes the Cue struct, ShowEngine's tick loop and the stored
+   layout, so the shape has to be settled before any code.
+4. **Output types.** Every OUT port configurable as exactly one type.
+   See the table below.
+5. **Inputs** (foot switch, limit switch, reed, PIR). TriggerManager
+   exists and drives the legacy effect test, but nothing routes a
+   physical trigger to a cue yet.
+6. Status / output monitor page - TBD.
+7. Show backup and restore - TBD.
+8. STATE and COLOR as real ActionCommands - TBD. An LED colour works
+   today because it is stored as Level on four channels, so this is less
+   urgent than it looks.
+
+TxQ comes after the RxQ list is settled.
+
+## Output types (wish list, not committed)
+
+Planned - every OUT port is configurable as exactly one of these:
+
+| Output type | Purpose | Command(s) |
+|---|---|---|
+| SERVO | Hobby servos | LEVEL |
+| STEPPER | Step/Dir driver (DRV8825, TMC2209) | LEVEL (target position) |
+| APA102 / WS2812 LED | Addressable RGB/RGBW, plus other popular types | COLOR, LEVEL (brightness) |
+| DIGITAL OUTPUT | Logic output driving a MOSFET, SSR or relay module | STATE |
+| H-BRIDGE | DC motor driver (TB6612, BTS7960) | LEVEL (speed), STATE (direction, later) |
+
+Raised but not committed:
+
+| Output type | Notes |
+|---|---|
+| PWM OUTPUT | Generic PWM for dimmers, fans, custom drivers |
+| DMX OUTPUT | One port generating DMX through an RS-485 transceiver |
+| ANALOG OUTPUT | If a future MCU has a good enough DAC |
+| SOLENOID | Probably just a Digital Output with a better name |
+
+Today only SERVO and an addressable LED exist, both driven by LEVEL.
+Adding a type is now a catalog entry plus a field/command table rather
+than a refactor - see OutputCatalog.h.

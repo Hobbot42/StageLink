@@ -106,8 +106,15 @@ real credentials in secrets.example.h — it is tracked; secrets.h is not.
 ## UI rules
 - Rotate navigates or edits a value, a short press selects/confirms/GOes, 
   and the dedicated Back button goes back or cancels one step.
-- Don't add per-screen gesture hints — the controls are the same 
-  everywhere, so a reminder just costs a row.
+- Don't add per-screen gesture hints for the standard controls — rotate,
+  press and Back behave the same everywhere, so a reminder just costs a
+  row. A hint is warranted only for a gesture that exists on one screen
+  alone and can't be discovered: the name-entry screen's "Hold = Delete
+  all" is the one case.
+- Holding confirm (encoder or Action button) is a real gesture in the
+  GUI, handled by GuiController::handleHoldConfirm(). It is a no-op
+  except on the name-entry screens. This is not the old "hold = back"
+  convention, which stays removed.
 - Don't ship a control that does nothing. A field or command with no 
   implementation behind it gets removed, not left as a placeholder.
 - ">" marks the cursor. "-" marks the running cue on the Show Run screen, 
@@ -125,19 +132,27 @@ real credentials in secrets.example.h — it is tracked; secrets.h is not.
   style port names are normal and expected.
 
 ## Known open issues (see PROJECT_NOTES.md for full list)
-- ActionEngine only implements the Level command; Color and State 
-  are placeholders, not yet functional.
-- Actions have no delay or fade. The design calls for both to be optional 
-  per action, but ActionEngine applies values instantly and has no tick — 
-  real timing needs scheduling and per-channel ramp state, not just a field.
-- No Output Setup yet. The output catalog (LED, SERVO and the channels 
-  behind them) is hardcoded in GuiController.cpp and kept in sync with 
-  main.cpp's OUTPUT_CHANNEL_* constants by hand. Outputs aren't named or 
-  typed by the operator, so actions read "LED"/"SERVO", not "Dragon Head".
-- Cue timing/auto-follow doesn't exist; a cue is a set of actions with no 
-  duration, and GO can interrupt at any time.
+- Only the Level action command is implemented. Color and State are
+  reserved ActionCommand values that ActionEngine ignores. An LED colour
+  works today because it is stored as Level on four channels, not because
+  Color is implemented.
+- Actions have no delay or fade of their own. A *cue* has a fade time and
+  ActionEngine can ramp, so the machinery exists - what is missing is
+  per-action timing, which is what staggers a sequence rather than moving
+  everything together.
+- No auto-follow, hold or loop. A cue is a set of actions with a fade
+  time; GO can interrupt at any time and nothing advances on its own.
+- Capacity is low and arbitrary: 4 shows, 8 cues per show, 8 actions per
+  cue. RAM is only 18% used, so these can be raised - but the stored
+  layout changes, so bump ShowStorage::LAYOUT_VERSION with it, and keep
+  one show under the ~4KB NVS entry limit.
+- No inputs. TriggerManager exists and drives the legacy effect test, but
+  nothing routes a physical trigger to a cue.
+- No status/output monitor page showing live output values. OutputManager
+  ::lastValue() already tracks them, so this is mostly a display screen.
+- No show backup/restore.
 - TxQ hasn't been updated for any of the show editing work.
-- The legacy diagnostic pages (Status/Diagnostics/Effect Test/Trigger 
-  Status, reached via Setup > Diagnostics) still use the local button's 
-  hold gesture. The GUI does not — it has a dedicated Back button. Don't 
+- The legacy diagnostic pages (Status/Diagnostics/Effect Test/Trigger
+  Status, reached via Setup > Diagnostics) still use the local button's
+  hold gesture. The GUI does not - it has a dedicated Back button. Don't
   reintroduce "hold = back" language in GUI screens.
