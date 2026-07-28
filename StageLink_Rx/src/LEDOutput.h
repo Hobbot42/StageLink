@@ -88,7 +88,7 @@ public:
 
     // Call every loop(). Rate-limited internally - a no-op most calls,
     // only actually steps (and refreshes the strip) once per
-    // FADE_STEP_INTERVAL_MS.
+    // one strip write per loop rather than one per channel setter.
     void tick();
 
 private:
@@ -112,7 +112,6 @@ private:
     uint8_t targetBlue = 255;
     uint8_t targetBrightness = 0;
 
-    unsigned long lastFadeStepTime = 0;
 };
 
 // Thin OutputDevice adapter that forwards update() to one channel setter

@@ -10,15 +10,6 @@ namespace
     constexpr int DEFAULT_SERVO_MIN_ANGLE = 0;
     constexpr int DEFAULT_SERVO_MAX_ANGLE = 180;
 
-    // How often (and how far) tick() steps toward the target angle - 5
-    // degrees every 5ms (up to 1000 deg/sec), so a full 0-180 sweep
-    // takes ~0.18s. Fast enough that a hobby servo's own mechanical
-    // slew rate is the real limit, not this step rate - responsiveness
-    // (keeping up with a fast knob turn) prioritized over the smoothing
-    // this was originally added for; some jitter on quick moves is the
-    // accepted tradeoff.
-    constexpr unsigned long SERVO_STEP_INTERVAL_MS = 5;
-    constexpr int SERVO_STEP_SIZE = 5;
 }
 
 ServoOutput::ServoOutput(uint8_t pin)
@@ -71,16 +62,13 @@ void ServoOutput::tick()
         return;
     }
 
-    if (millis() - lastStepTime < SERVO_STEP_INTERVAL_MS)
-    {
-        return;
-    }
-
-    lastStepTime = millis();
-
-    int delta = targetAngle - currentAngle;
-    int step = constrain(delta, -SERVO_STEP_SIZE, SERVO_STEP_SIZE);
-    currentAngle += step;
+    // Commands the angle as given, with no rate limiting of its own - the
+    // servo's own mechanical slew rate is then the only limit. This used
+    // to step 5 degrees every 5ms, which put a fixed ~0.18s ramp under
+    // every move and meant a zero-second cue never truly snapped. A move
+    // that should take time gets it from the cue's fade instead (see
+    // ActionEngine.h), so timing lives in one place.
+    currentAngle = targetAngle;
 
     servo.write(currentAngle);
 }

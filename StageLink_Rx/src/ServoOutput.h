@@ -32,7 +32,7 @@ public:
 
     // Call every loop(). Rate-limited internally - a no-op most calls,
     // only actually steps (and writes to the servo) once per
-    // SERVO_STEP_INTERVAL_MS. Same easing approach as LEDOutput::tick().
+    // Applies the commanded angle - no rate limiting, see the .cpp.
     void tick();
 
 private:
@@ -47,5 +47,4 @@ private:
     // step from the encoder).
     int currentAngle = 0;
     int targetAngle = 0;
-    unsigned long lastStepTime = 0;
 };

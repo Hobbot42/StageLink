@@ -31,24 +31,21 @@ namespace
     constexpr uint8_t DEFAULT_CLOCK_PIN = 19;
     constexpr int32_t DEFAULT_LED_COUNT = 8;
 
-    // How often (and how far) tick() steps a channel toward its target.
-    // Duration scales with distance: a full 0-255 sweep takes ~1.3s
-    // (128 steps * 10ms), a single 5-unit click-step takes ~30ms.
-    constexpr unsigned long FADE_STEP_INTERVAL_MS = 10;
-    constexpr uint8_t FADE_STEP_SIZE = 2;
-
-    // Moves current one step toward target (clamped so it never
-    // overshoots). Returns whether it actually changed.
-    bool stepToward(uint8_t &current, uint8_t target, uint8_t step)
+    // Takes the commanded value as-is. This used to ease toward the
+    // target a couple of units at a time, which added a fixed ~1.3s
+    // fade to every change - that made a zero-second cue visibly fade,
+    // and made a timed cue land late, since the strip was still catching
+    // up after ActionEngine's ramp had finished. Timing belongs to
+    // ActionEngine now (see ActionEngine.h), so there is exactly one
+    // place that decides how long a change takes.
+    bool applyNow(uint8_t &current, uint8_t target)
     {
         if (current == target)
         {
             return false;
         }
 
-        int delta = static_cast<int>(target) - static_cast<int>(current);
-        int clampedStep = constrain(delta, -static_cast<int>(step), static_cast<int>(step));
-        current = static_cast<uint8_t>(static_cast<int>(current) + clampedStep);
+        current = target;
 
         return true;
     }
@@ -227,18 +224,15 @@ void LEDOutput::update(int32_t value)
 
 void LEDOutput::tick()
 {
-    if (millis() - lastFadeStepTime < FADE_STEP_INTERVAL_MS)
-    {
-        return;
-    }
-
-    lastFadeStepTime = millis();
-
+    // Values are applied as commanded, with no easing of its own - see
+    // the class comment. All this does is push a changed set of values to
+    // the strip once per loop, rather than once per setter, so a cue that
+    // sets red, green, blue and brightness costs one strip write.
     bool changed = false;
-    changed |= stepToward(red, targetRed, FADE_STEP_SIZE);
-    changed |= stepToward(green, targetGreen, FADE_STEP_SIZE);
-    changed |= stepToward(blue, targetBlue, FADE_STEP_SIZE);
-    changed |= stepToward(brightness, targetBrightness, FADE_STEP_SIZE);
+    changed |= applyNow(red, targetRed);
+    changed |= applyNow(green, targetGreen);
+    changed |= applyNow(blue, targetBlue);
+    changed |= applyNow(brightness, targetBrightness);
 
     if (changed)
     {
