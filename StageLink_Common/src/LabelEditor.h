@@ -46,6 +46,25 @@ namespace StageLink
             cancelled_ = false;
         }
 
+        // Blanks every character and returns to the first one, so a name
+        // can be retyped from scratch instead of dialled through character
+        // by character. Only the text is cleared - whatever is being named
+        // is untouched.
+        void clearAll()
+        {
+            if (!active_)
+            {
+                return;
+            }
+
+            for (size_t i = 0; i < LABEL_MAX_LENGTH; ++i)
+            {
+                buffer_[i] = ' ';
+            }
+            buffer_[LABEL_MAX_LENGTH] = '\0';
+            cursor_ = 0;
+        }
+
         bool isActive() const { return active_; }
         bool wasCancelled() const { return cancelled_; }
         const char *buffer() const { return buffer_; }

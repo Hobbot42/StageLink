@@ -22,16 +22,28 @@ public:
     // Must be called every loop() - polls and debounces.
     void update();
 
-    // One-shot "was pressed since the last check" - edge-triggered,
-    // same convention as Encoder::consumeButtonStateChange()'s press
-    // edge, but this class only reports the press (not release), since
-    // that's all GuiController currently needs from these two buttons.
+    // One-shot "was tapped since the last check". Reported on *release*,
+    // not on the press edge, because a press can't be told apart from the
+    // start of a hold until the button comes back up. A press that turned
+    // into a hold never reports here - consumeHold() got it instead.
     bool consumePress();
 
+    // One-shot "has been held past HOLD_MS", reported once while the
+    // button is still down rather than on release, so the action happens
+    // when the operator feels the hold land.
+    bool consumeHold();
+
 private:
+    // Matches the legacy pages' LOCAL_BUTTON_HOLD_MS (see main.cpp), so
+    // a hold feels the same everywhere on the controller.
+    static constexpr unsigned long HOLD_MS = 600;
+
     uint8_t pin_;
     bool lastRawState_ = false;
     bool debouncedState_ = false;
     unsigned long lastChangeTime_ = 0;
+    unsigned long pressStartTime_ = 0;
     bool pressEvent_ = false;
+    bool holdEvent_ = false;
+    bool holdFired_ = false;
 };
