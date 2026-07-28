@@ -188,12 +188,12 @@ namespace
     // "Edit" opens the cue's action list, which is what pressing the cue
     // used to do directly.
     constexpr const char *CUE_OPTIONS[] = {
-        "Edit", "Rename", "Fade Time", "Copy", "Move Up", "Move Down", "Delete"
+        "Edit", "Fade Time", "Rename", "Copy", "Move Up", "Move Down", "Delete"
     };
     constexpr uint8_t CUE_OPTION_COUNT = itemCount(CUE_OPTIONS);
     constexpr uint8_t CUE_OPTION_EDIT = 0;
-    constexpr uint8_t CUE_OPTION_RENAME = 1;
-    constexpr uint8_t CUE_OPTION_FADE = 2;
+    constexpr uint8_t CUE_OPTION_FADE = 1;
+    constexpr uint8_t CUE_OPTION_RENAME = 2;
     constexpr uint8_t CUE_OPTION_COPY = 3;
     constexpr uint8_t CUE_OPTION_MOVE_UP = 4;
     constexpr uint8_t CUE_OPTION_MOVE_DOWN = 5;
@@ -1357,8 +1357,15 @@ void GuiController::handlePress()
             }
             break;
 
+        case Screen::CueFadeEntry:
+            // Confirms the dialled time and steps back to the cue's option
+            // menu, which shows the new value on its Fade Time row.
+            showEngine_->setCueFadeTenths(currentCueIndex_, editFadeTenths_);
+            popScreen();
+            break;
+
         case Screen::SetupList:
-            if (currentSelection() == 0) // Unit Label
+            if (currentSelection() == 0) // Controller Label
             {
                 labelEditor_->begin(deviceInfo_->unitLabel);
                 pushScreen(Screen::ControllerLabelEdit);
@@ -1530,10 +1537,17 @@ void GuiController::render()
             for (uint8_t i = 0; i < cueCount && count < MAX_LIST_ITEMS - 1; ++i)
             {
                 // The Q number is the position, generated here rather
-                // than stored - see ShowEngine.h.
+                // than stored - see ShowEngine.h. The fade time sits
+                // before the name, not after: a row is 23 characters at
+                // this font, so a long name has to be what gets cut off,
+                // never the timing.
+                const uint16_t fadeTenths = showEngine_->getCueFadeTenths(i);
                 snprintf(
-                    listLabels_[count], LABEL_SIZE, "Q%02u %s",
-                    static_cast<unsigned>(i + 1), showEngine_->getCueNameAt(i)
+                    listLabels_[count], LABEL_SIZE, "Q%02u %u.%us %s",
+                    static_cast<unsigned>(i + 1),
+                    static_cast<unsigned>(fadeTenths / 10),
+                    static_cast<unsigned>(fadeTenths % 10),
+                    showEngine_->getCueNameAt(i)
                 );
                 itemPointers_[count] = listLabels_[count];
                 count++;
