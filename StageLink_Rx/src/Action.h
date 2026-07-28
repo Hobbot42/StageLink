@@ -26,6 +26,13 @@ enum class ActionCommand : uint8_t
 // packetTypeName() / DeviceInfo.h's capabilityName().
 const char *actionCommandName(ActionCommand command);
 
+// Timing values are in tenths of a second, matching a cue's fade time -
+// that is the resolution the operator sets and it keeps a stored action
+// small. FADE_FROM_CUE means "however long the cue takes", which is what
+// an action uses unless it is given a fade of its own.
+constexpr uint16_t ACTION_MAX_TENTHS = 999;      // 99.9s
+constexpr uint16_t ACTION_FADE_FROM_CUE = 0xFFFF;
+
 struct Action
 {
     // OutputManager channel number - same numbering RX main.cpp's
@@ -35,5 +42,16 @@ struct Action
     // safely (returns false, no-op).
     uint8_t outputId;
     ActionCommand command;
+
+    // How long after GO before this action starts. 0 starts with the cue;
+    // anything else staggers it, which is what makes a sequence out of a
+    // set of actions that would otherwise all move together.
+    uint16_t delayTenths;
+
+    // How long this action takes once it starts. ACTION_FADE_FROM_CUE
+    // defers to the cue's own fade time, so setting the cue once covers
+    // every action that hasn't been given a time of its own.
+    uint16_t fadeTenths;
+
     int32_t value;
 };

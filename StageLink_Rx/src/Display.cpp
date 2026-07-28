@@ -314,10 +314,16 @@ void Display::showUnitLabelEdit(const char *buffer, uint8_t cursor, bool useBack
     snprintf(charLine, sizeof(charLine), "Char %d of %d", cursor + 1, StageLink::LABEL_MAX_LENGTH);
     printLine(charLine);
 
-    // The GUI shows no gesture hint - the controls are consistent across
-    // every screen, so a per-screen reminder is just a used row. The
-    // legacy diagnostic pages keep theirs: hold is not obvious there.
-    if (!useBackButton)
+    // The GUI names only the one gesture that is specific to this screen
+    // and undiscoverable: holding confirm wipes the whole name. Rotate
+    // and press behave the same here as everywhere, so they need no
+    // reminder. The legacy diagnostic pages keep their own hint, where
+    // hold means something different and is not obvious either.
+    if (useBackButton)
+    {
+        printLine("Hold = Delete all");
+    }
+    else
     {
         printLine("Press=next Hold=back");
     }

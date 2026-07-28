@@ -9,9 +9,9 @@
 //
 // Both the GUI's Show Mode and its Program Mode read and write through
 // here (see GuiController.h) - there is no second copy of show data
-// anywhere. Still no persistence: everything lives in RAM and is rebuilt
-// by loadTestShow() on each boot, so edits are lost on reset until flash
-// storage exists.
+// anywhere. The whole show list is held in RAM and written to the
+// filesystem shortly after editing stops (see tick()/ShowStorage.h), so
+// programming survives a power cycle.
 //
 // currentCue is the cue considered "already run" (what go() last landed
 // on, and what executeCurrentCue() acts on); selectedCue is what
@@ -37,13 +37,19 @@
 class ShowEngine
 {
 public:
-    static constexpr uint8_t MAX_SHOWS = 4;
-    static constexpr uint8_t MAX_CUES = 8;
+    // Storage is no longer the limit - that is a 1.4MB filesystem (see
+    // ShowStorage.h). Static RAM is: every show is resident, and the
+    // ESP32's .bss segment is far smaller than its total RAM, so these
+    // numbers are what fits rather than what the filesystem could hold.
+    // Holding only the selected show in memory and paging the rest from
+    // disk would lift this considerably and needs no storage change.
+    static constexpr uint8_t MAX_SHOWS = 8;
+    static constexpr uint8_t MAX_CUES = 32;
 
     // A cue that sets a servo position plus a full LED color needs 5
     // actions on its own (servo + R/G/B/brightness), so this has to be
     // comfortably above the one-action-per-cue the first test show used.
-    static constexpr uint8_t MAX_ACTIONS_PER_CUE = 8;
+    static constexpr uint8_t MAX_ACTIONS_PER_CUE = 16;
 
     static constexpr uint8_t SHOW_NAME_SIZE = 32;
     static constexpr uint8_t CUE_NAME_SIZE = 24;
@@ -152,6 +158,21 @@ public:
     // a second. 0 is an instant snap.
     uint16_t getCueFadeTenths(uint8_t cueIndex) const;
     bool setCueFadeTenths(uint8_t cueIndex, uint16_t tenths);
+
+    // Per-action timing. Both apply to the whole range an edited action
+    // covers, since one edited action can be several stored actions (an
+    // LED colour is four channels) and they have to move together.
+    // Reading returns the first action's value, which is what the editor
+    // wrote across the range.
+    uint16_t getActionDelayTenths(uint8_t cueIndex, uint8_t actionIndex) const;
+    uint16_t getActionFadeTenths(uint8_t cueIndex, uint8_t actionIndex) const;
+    bool setActionTiming(
+        uint8_t cueIndex,
+        uint8_t startIndex,
+        uint8_t count,
+        uint16_t delayTenths,
+        uint16_t fadeTenths
+    );
 
     // Appends an empty cue carrying the generated default name
     // ("Cue 01"), flagged autoName. Returns false (and changes nothing)

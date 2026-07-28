@@ -156,11 +156,13 @@ namespace
 
     constexpr const char *MODE_MENU_ITEMS[] = { "Show Mode", "Program Mode", "Setup Mode" };
     constexpr const char *SETUP_ITEMS[] = {
-        "Controller Label", "Output Setup", "Diagnostics", "Update Mode"
+        "Controller Label", "Output Setup", "Diagnostics", "Update Mode", "Done Setup"
     };
     constexpr uint8_t SETUP_ITEM_CONTROLLER_LABEL = 0;
     constexpr uint8_t SETUP_ITEM_OUTPUT_SETUP = 1;
     constexpr uint8_t SETUP_ITEM_DIAGNOSTICS = 2;
+    constexpr uint8_t SETUP_ITEM_UPDATE_MODE = 3;
+    constexpr uint8_t SETUP_ITEM_DONE = 4;
 
     // Only renaming for now. An output's type is what main.cpp actually
     // registered on those channels, so offering to change it here would
@@ -178,10 +180,20 @@ namespace
     // pressing Back once per level.
     constexpr const char *DONE_PROGRAMMING_ITEM = "Done Programming";
 
+    // Setup Mode's equivalent. Both sit last on every list they appear on,
+    // so "get me out of here" is always in the same place.
+    constexpr const char *DONE_SETUP_ITEM = "Done Setup";
+
     // What pressing an existing Action List row offers. Reordering and
     // deleting live here rather than on a gesture of their own, so the
     // encoder/press/hold convention stays the same on every screen.
-    constexpr const char *ACTION_OPTIONS[] = { "Edit", "Move Up", "Move Down", "Delete" };
+    constexpr const char *ACTION_OPTIONS[] = {
+        "Edit", "Delay", "Fade", "Move Up", "Move Down", "Delete"
+    };
+
+    // An action's fade can also be "however long the cue takes", which is
+    // one step below 0.0s on the dial rather than a separate control.
+    constexpr const char *FADE_FROM_CUE_TEXT = "Cue";
 
     // "Edit" opens the cue's action list, which is what pressing the cue
     // used to do directly.
@@ -214,9 +226,11 @@ namespace
     constexpr uint8_t SHOW_OPTION_DELETE = 3;
     constexpr uint8_t ACTION_OPTION_COUNT = itemCount(ACTION_OPTIONS);
     constexpr uint8_t ACTION_OPTION_EDIT = 0;
-    constexpr uint8_t ACTION_OPTION_MOVE_UP = 1;
-    constexpr uint8_t ACTION_OPTION_MOVE_DOWN = 2;
-    constexpr uint8_t ACTION_OPTION_DELETE = 3;
+    constexpr uint8_t ACTION_OPTION_DELAY = 1;
+    constexpr uint8_t ACTION_OPTION_FADE = 2;
+    constexpr uint8_t ACTION_OPTION_MOVE_UP = 3;
+    constexpr uint8_t ACTION_OPTION_MOVE_DOWN = 4;
+    constexpr uint8_t ACTION_OPTION_DELETE = 5;
 
     uint8_t wrapIndex(uint8_t current, int step, uint8_t count)
     {
@@ -333,6 +347,8 @@ uint8_t GuiController::buildActions(uint8_t outputIndex, Action *out) const
         {
             out[i].outputId = channels[i];
             out[i].command = ActionCommand::Level;
+            out[i].delayTenths = pendingDelayTenths_;
+            out[i].fadeTenths = pendingFadeTenths_;
             out[i].value = values[i];
         }
 
@@ -348,6 +364,8 @@ uint8_t GuiController::buildActions(uint8_t outputIndex, Action *out) const
     {
         out[count].outputId = channels[i];
         out[count].command = ActionCommand::Level;
+        out[count].delayTenths = pendingDelayTenths_;
+        out[count].fadeTenths = pendingFadeTenths_;
         out[count].value = editValues_[i];
         count++;
     }
@@ -742,6 +760,14 @@ void GuiController::beginActionFlow(uint8_t start, uint8_t length)
     editGroupLength_ = length;
     actionFlowReturnDepth_ = stackDepth_;
 
+    // Carried through the edit so rewriting the action preserves it.
+    pendingDelayTenths_ = length > 0
+        ? showEngine_->getActionDelayTenths(currentCueIndex_, start)
+        : 0;
+    pendingFadeTenths_ = length > 0
+        ? showEngine_->getActionFadeTenths(currentCueIndex_, start)
+        : ACTION_FADE_FROM_CUE;
+
     if (length > 0)
     {
         const Action *actions = showEngine_->getActions(currentCueIndex_);
@@ -842,7 +868,8 @@ void GuiController::handleRotate(int direction)
             break;
 
         case Screen::ShowList:
-            currentSelection() = wrapIndex(currentSelection(), step, showEngine_->getShowCount() + 1);
+            // Shows, then "+ New Show", then "Done Programming".
+            currentSelection() = wrapIndex(currentSelection(), step, showEngine_->getShowCount() + 2);
             break;
 
         case Screen::CueList:
@@ -857,6 +884,28 @@ void GuiController::handleRotate(int direction)
         case Screen::CueOptions:
             currentSelection() = wrapIndex(currentSelection(), step, CUE_OPTION_COUNT);
             break;
+
+        case Screen::ActionTimeEntry:
+        {
+            // Fade dials one step below zero into "use the cue's time";
+            // delay has no such state, so it stops at zero.
+            const int lowest = editingActionFade_ ? -1 : 0;
+            const bool inheriting = editingActionFade_
+                                    && editActionTimeTenths_ == ACTION_FADE_FROM_CUE;
+            const int current = inheriting ? -1 : static_cast<int>(editActionTimeTenths_);
+
+            const int timeStep = current >= FADE_FINE_LIMIT_TENTHS
+                                     ? FADE_COARSE_STEP
+                                     : FADE_FINE_STEP;
+            const int moved = constrain(
+                current + step * timeStep, lowest, static_cast<int>(ShowEngine::MAX_FADE_TENTHS)
+            );
+
+            editActionTimeTenths_ = moved < 0
+                                        ? ACTION_FADE_FROM_CUE
+                                        : static_cast<uint16_t>(moved);
+            break;
+        }
 
         case Screen::CueFadeEntry:
         {
@@ -919,7 +968,8 @@ void GuiController::handleRotate(int direction)
             break;
 
         case Screen::OutputList:
-            currentSelection() = wrapIndex(currentSelection(), step, outputCatalog_->getCount());
+            // Outputs, then "Done Setup".
+            currentSelection() = wrapIndex(currentSelection(), step, outputCatalog_->getCount() + 1);
             break;
 
         case Screen::OutputOptions:
@@ -985,6 +1035,13 @@ void GuiController::handlePress()
         {
             const uint8_t showCount = showEngine_->getShowCount();
 
+            if (currentSelection() == showCount + 1) // "Done Programming"
+            {
+                stackDepth_ = 1;
+                stack_[0] = { Screen::ModeMenu, 0 };
+                break;
+            }
+
             if (currentSelection() == showCount) // "+ New Show"
             {
                 if (showEngine_->addShow())
@@ -1012,6 +1069,10 @@ void GuiController::handlePress()
                 currentCueIndex_ = 0;
                 popScreen();
                 pushScreen(Screen::CueList);
+
+                // Opens on "+ Add Cue", the row after the existing cues -
+                // building a show is what this screen is usually for.
+                currentSelection() = showEngine_->getCueCount();
             }
             else if (option == SHOW_OPTION_RENAME)
             {
@@ -1049,13 +1110,13 @@ void GuiController::handlePress()
             {
                 if (showEngine_->addCue())
                 {
+                    // A new cue asks for its fade time before its actions
+                    // - the timing is part of describing the cue, and
+                    // asking once up front beats going back for it later.
                     currentCueIndex_ = cueCount;
-                    pushScreen(Screen::ActionList);
-
-                    // A new cue has no actions, so this is row 0 - set
-                    // explicitly anyway, so the rule holds if the entry
-                    // order on this screen ever changes.
-                    currentSelection() = uiActionCount();
+                    editFadeTenths_ = showEngine_->getCueFadeTenths(currentCueIndex_);
+                    newCueFlow_ = true;
+                    pushScreen(Screen::CueFadeEntry);
                 }
             }
             else
@@ -1169,7 +1230,9 @@ void GuiController::handlePress()
                 if (showEngine_->addCue())
                 {
                     currentCueIndex_ = cueCount;
-                    currentSelection() = 0; // new cue is empty - row 0 is "+ Add Action"
+                    editFadeTenths_ = showEngine_->getCueFadeTenths(currentCueIndex_);
+                    newCueFlow_ = true;
+                    pushScreen(Screen::CueFadeEntry);
                 }
             }
             else
@@ -1197,6 +1260,16 @@ void GuiController::handlePress()
                 // returns to the Action List rather than back to here.
                 popScreen();
                 beginActionFlow(editGroupStart_, editGroupLength_);
+                break;
+            }
+
+            if (option == ACTION_OPTION_DELAY || option == ACTION_OPTION_FADE)
+            {
+                editingActionFade_ = option == ACTION_OPTION_FADE;
+                editActionTimeTenths_ = editingActionFade_
+                    ? showEngine_->getActionFadeTenths(currentCueIndex_, editGroupStart_)
+                    : showEngine_->getActionDelayTenths(currentCueIndex_, editGroupStart_);
+                pushScreen(Screen::ActionTimeEntry);
                 break;
             }
 
@@ -1352,6 +1425,31 @@ void GuiController::handlePress()
             }
             break;
 
+        case Screen::ActionTimeEntry:
+        {
+            // Written across the whole group - one edited action can be
+            // several stored actions, and they have to move together.
+            const uint16_t delayTenths = editingActionFade_
+                ? showEngine_->getActionDelayTenths(currentCueIndex_, editGroupStart_)
+                : editActionTimeTenths_;
+            const uint16_t fadeTenths = editingActionFade_
+                ? editActionTimeTenths_
+                : showEngine_->getActionFadeTenths(currentCueIndex_, editGroupStart_);
+
+            showEngine_->setActionTiming(
+                currentCueIndex_, editGroupStart_, editGroupLength_, delayTenths, fadeTenths
+            );
+
+            // Back to the action list, past the options screen it opened
+            // from - the same shape as confirming a cue's fade.
+            popScreen();
+            if (currentScreen() == Screen::ActionOptions)
+            {
+                popScreen();
+            }
+            break;
+        }
+
         case Screen::CueFadeEntry:
             // Confirms the dialled time and goes back out to the cue list
             // rather than the option menu it was opened from - the time is
@@ -1359,6 +1457,24 @@ void GuiController::handlePress()
             // is guarded rather than assumed, so this can't walk off the
             // stack if the screen is ever reached another way.
             showEngine_->setCueFadeTenths(currentCueIndex_, editFadeTenths_);
+
+            if (newCueFlow_)
+            {
+                // Straight on into the new cue's actions, which is what
+                // the operator came here to fill in.
+                newCueFlow_ = false;
+                popScreen();
+
+                // Reached from the cue list this needs a new frame;
+                // reached from the action list we are already on one.
+                if (currentScreen() != Screen::ActionList)
+                {
+                    pushScreen(Screen::ActionList);
+                }
+
+                currentSelection() = uiActionCount();
+                break;
+            }
 
             popScreen();
             if (currentScreen() == Screen::CueOptions)
@@ -1391,14 +1507,27 @@ void GuiController::handlePress()
                     enterLegacyMode_();
                 }
             }
-            else if (enterUpdateMode_ != nullptr) // Update Mode
+            else if (currentSelection() == SETUP_ITEM_UPDATE_MODE)
             {
-                enterUpdateMode_();
+                if (enterUpdateMode_ != nullptr)
+                {
+                    enterUpdateMode_();
+                }
+            }
+            else if (currentSelection() == SETUP_ITEM_DONE)
+            {
+                stackDepth_ = 1;
+                stack_[0] = { Screen::ModeMenu, 0 };
             }
             break;
 
         case Screen::OutputList:
-            if (outputCatalog_->getCount() > 0)
+            if (currentSelection() == outputCatalog_->getCount()) // "Done Setup"
+            {
+                stackDepth_ = 1;
+                stack_[0] = { Screen::ModeMenu, 0 };
+            }
+            else if (outputCatalog_->getCount() > 0)
             {
                 optionsOutputIndex_ = currentSelection();
                 pushScreen(Screen::OutputOptions);
@@ -1427,6 +1556,21 @@ void GuiController::handlePress()
                 commitRename();
                 popScreen();
             }
+            break;
+    }
+}
+
+void GuiController::handleHoldConfirm()
+{
+    switch (currentScreen())
+    {
+        case Screen::NameEdit:
+        case Screen::ControllerLabelEdit:
+            // Clears the text only - whatever is being named is untouched.
+            labelEditor_->clearAll();
+            break;
+
+        default:
             break;
     }
 }
@@ -1552,6 +1696,7 @@ void GuiController::render()
             }
 
             itemPointers_[count++] = "+ New Show";
+            itemPointers_[count++] = DONE_PROGRAMMING_ITEM;
             Display::showGuiList("PROGRAM SHOW", nullptr, itemPointers_, count, currentSelection());
             break;
         }
@@ -1719,12 +1864,73 @@ void GuiController::render()
             break;
         }
 
-        case Screen::ActionOptions:
-            Display::showGuiList(
-                "ACTION", showEngine_->getCueNameAt(currentCueIndex_),
-                ACTION_OPTIONS, ACTION_OPTION_COUNT, currentSelection()
+        case Screen::ActionTimeEntry:
+        {
+            char valueText[12];
+            if (editingActionFade_ && editActionTimeTenths_ == ACTION_FADE_FROM_CUE)
+            {
+                snprintf(valueText, sizeof(valueText), "%s", FADE_FROM_CUE_TEXT);
+            }
+            else
+            {
+                snprintf(
+                    valueText, sizeof(valueText), "%u.%u sec",
+                    static_cast<unsigned>(editActionTimeTenths_ / 10),
+                    static_cast<unsigned>(editActionTimeTenths_ % 10)
+                );
+            }
+
+            Display::showGuiValueEntry(
+                editingActionFade_ ? "ACTION FADE" : "ACTION DELAY",
+                showEngine_->getCueNameAt(currentCueIndex_),
+                editingActionFade_ ? "FADE" : "DELAY", valueText, 0, 1
             );
             break;
+        }
+
+        case Screen::ActionOptions:
+        {
+            for (uint8_t i = 0; i < ACTION_OPTION_COUNT && i < MAX_LIST_ITEMS; ++i)
+            {
+                itemPointers_[i] = ACTION_OPTIONS[i];
+            }
+
+            const uint16_t delayTenths =
+                showEngine_->getActionDelayTenths(currentCueIndex_, editGroupStart_);
+            snprintf(
+                listLabels_[ACTION_OPTION_DELAY], LABEL_SIZE, "%s %u.%us",
+                ACTION_OPTIONS[ACTION_OPTION_DELAY],
+                static_cast<unsigned>(delayTenths / 10),
+                static_cast<unsigned>(delayTenths % 10)
+            );
+            itemPointers_[ACTION_OPTION_DELAY] = listLabels_[ACTION_OPTION_DELAY];
+
+            const uint16_t fadeTenths =
+                showEngine_->getActionFadeTenths(currentCueIndex_, editGroupStart_);
+            if (fadeTenths == ACTION_FADE_FROM_CUE)
+            {
+                snprintf(
+                    listLabels_[ACTION_OPTION_FADE], LABEL_SIZE, "%s %s",
+                    ACTION_OPTIONS[ACTION_OPTION_FADE], FADE_FROM_CUE_TEXT
+                );
+            }
+            else
+            {
+                snprintf(
+                    listLabels_[ACTION_OPTION_FADE], LABEL_SIZE, "%s %u.%us",
+                    ACTION_OPTIONS[ACTION_OPTION_FADE],
+                    static_cast<unsigned>(fadeTenths / 10),
+                    static_cast<unsigned>(fadeTenths % 10)
+                );
+            }
+            itemPointers_[ACTION_OPTION_FADE] = listLabels_[ACTION_OPTION_FADE];
+
+            Display::showGuiList(
+                "ACTION", showEngine_->getCueNameAt(currentCueIndex_),
+                itemPointers_, ACTION_OPTION_COUNT, currentSelection()
+            );
+            break;
+        }
 
         case Screen::OutputSelect:
         {
@@ -1816,7 +2022,11 @@ void GuiController::render()
                 itemPointers_[i] = listLabels_[i];
             }
 
-            Display::showGuiList("OUTPUTS", nullptr, itemPointers_, outputCount, currentSelection());
+            itemPointers_[outputCount] = DONE_SETUP_ITEM;
+
+            Display::showGuiList(
+                "OUTPUTS", nullptr, itemPointers_, outputCount + 1, currentSelection()
+            );
             break;
         }
 

@@ -5,12 +5,12 @@
 // array of Action (see Action.h), so it's reusable for anything that
 // has actions to run, not just ShowEngine's current cue.
 //
-// executeActions() takes a fade time. With fadeMs 0 it is a single
-// immediate pass, exactly as before: every action is forwarded to
-// OutputManager in order, with no timing. With a fade time it instead
-// starts a ramp per channel and returns straight away - tick() then walks
-// those ramps toward their targets on later loops, so a cue rises over
-// time rather than snapping.
+// executeActions() returns straight away and does the work over time.
+// Each action carries an optional delay and an optional fade (see
+// Action.h); an action with neither is applied immediately, exactly as
+// before any timing existed. Otherwise it becomes a ramp, and tick()
+// walks those ramps toward their targets on later loops - so a cue can
+// stagger its actions rather than moving everything at once.
 //
 // A ramp starts from OutputManager::lastValue() - wherever the output
 // actually is - not from an assumed zero. That is what makes an
@@ -32,22 +32,24 @@
 class ActionEngine
 {
 public:
-    // One ramp per channel a single cue can drive. Matches
-    // ShowEngine::MAX_ACTIONS_PER_CUE - a cue can't produce more
-    // simultaneous ramps than it has actions.
-    static constexpr uint8_t MAX_RAMPS = 8;
+    // One ramp per channel a single cue can drive - a cue can't produce
+    // more simultaneous ramps than it has actions, so this tracks
+    // ShowEngine::MAX_ACTIONS_PER_CUE. Not referencing it directly keeps
+    // ActionEngine free of any dependency on ShowEngine.
+    static constexpr uint8_t MAX_RAMPS = 16;
 
     // Applies actions[0..actionCount) to outputManager.
     //
-    // fadeMs 0 sets every value immediately. Any other value ramps each
-    // action's channel from its current value to the action's value over
-    // fadeMs, cancelling any ramp already running on that channel - call
-    // tick() every loop for those to progress.
+    // cueFadeMs is the cue's own fade time, used by any action that
+    // hasn't been given a fade of its own (ACTION_FADE_FROM_CUE - see
+    // Action.h). An action with no delay and no fade is applied
+    // immediately; anything else becomes a ramp, and tick() has to be
+    // called every loop for those to progress.
     void executeActions(
         const Action *actions,
         uint8_t actionCount,
         StageLink::OutputManager &outputManager,
-        uint32_t fadeMs = 0
+        uint32_t cueFadeMs = 0
     );
 
     // Advances any running ramps. Call every loop(); a no-op when nothing
@@ -68,9 +70,13 @@ private:
         uint8_t channel;
         int32_t from;
         int32_t to;
-        uint32_t startMs;
+        uint32_t startMs;   // when the ramp begins - later than now if delayed
         uint32_t durationMs;
         bool active;
+
+        // Whether the delay has expired and "from" has been captured.
+        // See executeActions() on why it isn't captured up front.
+        bool started;
     };
 
     // Stops any ramp on this channel, so a new one replaces it rather

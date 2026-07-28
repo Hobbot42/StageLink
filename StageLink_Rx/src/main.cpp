@@ -48,6 +48,7 @@
 #include "GuiController.h"
 #include "UiButton.h"
 #include "OutputCatalog.h"
+#include "ShowStorage.h"
 #include "ShowEngine.h"
 #include "UpdateMode.h"
 #include "OutputList.h"
@@ -709,6 +710,7 @@ void setup()
     // begin() restores whatever was saved to flash. The demo show only
     // seeds a unit that has nothing stored - without that check it would
     // wipe the operator's saved shows on every boot.
+    StageLink::ShowStorage::begin();
     showEngine.begin();
 
     if (LOAD_TEST_SHOW_ON_BOOT && showEngine.getShowCount() == 0)
@@ -831,10 +833,18 @@ void loop()
 
     if (guiActive)
     {
-        // No hold gesture here anymore - a release is always a press
-        // (select/confirm/GO), regardless of how long the encoder was
-        // held down.
-        if (localButtonReleased)
+        // Holding confirm is its own gesture (see
+        // GuiController::handleHoldConfirm()) - it fires while the button
+        // is still down, and localButtonHoldTriggered then suppresses the
+        // release so one gesture can't run two actions.
+        if (localButtonHoldNow)
+        {
+            localButtonHoldTriggered = true;
+            guiController.handleHoldConfirm();
+            showCurrentPage();
+        }
+
+        if (localButtonReleased && !localButtonHoldTriggered)
         {
             guiController.handlePress();
             showCurrentPage();
@@ -854,6 +864,15 @@ void loop()
         if (backButton.consumePress())
         {
             guiController.handleBack();
+            showCurrentPage();
+        }
+
+        // The Action button mirrors the encoder: a tap confirms, a hold
+        // does the hold gesture. UiButton reports a tap on release, so a
+        // press that became a hold never also reports as a tap.
+        if (actionButton.consumeHold())
+        {
+            guiController.handleHoldConfirm();
             showCurrentPage();
         }
 

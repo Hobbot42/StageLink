@@ -38,7 +38,7 @@ void ActionEngine::executeActions(
     const Action *actions,
     uint8_t actionCount,
     StageLink::OutputManager &outputManager,
-    uint32_t fadeMs
+    uint32_t cueFadeMs
 )
 {
     const uint32_t now = millis();
@@ -50,17 +50,23 @@ void ActionEngine::executeActions(
         switch (action.command)
         {
             case ActionCommand::Level:
-                if (fadeMs == 0)
+            {
+                // An action's own fade wins; ACTION_FADE_FROM_CUE means it
+                // never got one, so the cue's time applies.
+                const uint32_t fadeMs = action.fadeTenths == ACTION_FADE_FROM_CUE
+                                            ? cueFadeMs
+                                            : static_cast<uint32_t>(action.fadeTenths) * 100;
+                const uint32_t delayMs = static_cast<uint32_t>(action.delayTenths) * 100;
+
+                cancelChannel(action.outputId);
+
+                if (delayMs == 0 && fadeMs == 0)
                 {
-                    // No fade - same immediate behaviour this had before
-                    // fading existed. Any ramp on the channel is dropped
-                    // first, or it would carry on fighting this value.
-                    cancelChannel(action.outputId);
+                    // Nothing to schedule - same immediate behaviour this
+                    // had before any timing existed.
                     outputManager.update(action.outputId, action.value);
                     break;
                 }
-
-                cancelChannel(action.outputId);
 
                 for (uint8_t slot = 0; slot < MAX_RAMPS; ++slot)
                 {
@@ -69,18 +75,23 @@ void ActionEngine::executeActions(
                         continue;
                     }
 
-                    // Starts from where the output actually is, so a cue
-                    // fired mid-fade continues from the value reached
-                    // rather than snapping back to a stale start point.
                     ramps_[slot].channel = action.outputId;
-                    ramps_[slot].from = outputManager.lastValue(action.outputId);
                     ramps_[slot].to = action.value;
-                    ramps_[slot].startMs = now;
+                    ramps_[slot].startMs = now + delayMs;
                     ramps_[slot].durationMs = fadeMs;
                     ramps_[slot].active = true;
+
+                    // "from" is deliberately not captured here. A delayed
+                    // action starts from wherever the output is when its
+                    // delay expires, which may be mid-fade from something
+                    // else - capturing now would ramp from a value that is
+                    // already stale by the time it matters.
+                    ramps_[slot].started = false;
+                    ramps_[slot].from = 0;
                     break;
                 }
                 break;
+            }
 
             case ActionCommand::Color:
             case ActionCommand::State:
@@ -101,7 +112,21 @@ void ActionEngine::tick(StageLink::OutputManager &outputManager)
             continue;
         }
 
-        const uint32_t elapsed = now - ramp.startMs;
+        // Signed difference so a start time still in the future reads as
+        // negative rather than wrapping to a huge unsigned value.
+        const int32_t sinceStart = static_cast<int32_t>(now - ramp.startMs);
+        if (sinceStart < 0)
+        {
+            continue; // still waiting out its delay
+        }
+
+        if (!ramp.started)
+        {
+            ramp.from = outputManager.lastValue(ramp.channel);
+            ramp.started = true;
+        }
+
+        const uint32_t elapsed = static_cast<uint32_t>(sinceStart);
 
         if (ramp.durationMs == 0 || elapsed >= ramp.durationMs)
         {

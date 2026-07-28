@@ -187,6 +187,8 @@ void ShowEngine::addTestAction(
 
     cue.actions[cue.actionCount].outputId = outputId;
     cue.actions[cue.actionCount].command = command;
+    cue.actions[cue.actionCount].delayTenths = 0;
+    cue.actions[cue.actionCount].fadeTenths = ACTION_FADE_FROM_CUE;
     cue.actions[cue.actionCount].value = value;
     cue.actionCount++;
 }
@@ -482,6 +484,55 @@ bool ShowEngine::setCueFadeTenths(uint8_t cueIndex, uint16_t tenths)
     return true;
 }
 
+uint16_t ShowEngine::getActionDelayTenths(uint8_t cueIndex, uint8_t actionIndex) const
+{
+    const Cue *cue = cueAt(cueIndex);
+    if (cue == nullptr || actionIndex >= cue->actionCount)
+    {
+        return 0;
+    }
+
+    return cue->actions[actionIndex].delayTenths;
+}
+
+uint16_t ShowEngine::getActionFadeTenths(uint8_t cueIndex, uint8_t actionIndex) const
+{
+    const Cue *cue = cueAt(cueIndex);
+    if (cue == nullptr || actionIndex >= cue->actionCount)
+    {
+        return ACTION_FADE_FROM_CUE;
+    }
+
+    return cue->actions[actionIndex].fadeTenths;
+}
+
+bool ShowEngine::setActionTiming(
+    uint8_t cueIndex,
+    uint8_t startIndex,
+    uint8_t count,
+    uint16_t delayTenths,
+    uint16_t fadeTenths
+)
+{
+    Cue *cue = cueAt(cueIndex);
+    if (cue == nullptr || count == 0 || startIndex + count > cue->actionCount)
+    {
+        return false;
+    }
+
+    // Applied across the whole range: the channels behind one edited
+    // action have to start and finish together or a colour would tear.
+    for (uint8_t i = 0; i < count; ++i)
+    {
+        cue->actions[startIndex + i].delayTenths = delayTenths;
+        cue->actions[startIndex + i].fadeTenths = fadeTenths;
+    }
+
+    markDirty();
+
+    return true;
+}
+
 bool ShowEngine::addCue()
 {
     Show *show = selectedShow();
@@ -762,8 +813,8 @@ void ShowEngine::executeCue(uint8_t cueIndex, StageLink::OutputManager &outputMa
         return;
     }
 
-    // Tenths to milliseconds. 0 stays 0, which ActionEngine treats as an
-    // immediate set rather than a zero-length ramp.
+    // Tenths to milliseconds. This is the cue's time; an action that has
+    // a fade of its own overrides it (see Action.h).
     actionEngine_.executeActions(
         cue->actions, cue->actionCount, outputManager,
         static_cast<uint32_t>(cue->fadeTenths) * 100

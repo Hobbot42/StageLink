@@ -1,70 +1,89 @@
 #include "ShowStorage.h"
 
-#include <cstdio>
-#include <cstring>
-#include "ConfigManager.h"
+#include <Arduino.h>
+#include <LittleFS.h>
 
 namespace
 {
-    // NVS caps keys at 15 characters (see EffectStorage.cpp) - these are
-    // well under even at their longest ("show15" = 6).
-    constexpr size_t KEY_BUFFER_SIZE = 16;
+    // The unused data partition in the standard ESP32 table (labelled
+    // "spiffs", 1.4MB). Shows used to live in NVS, which is only 20KB and
+    // is shared with WiFi calibration and every setting - that capped a
+    // show list at a few kilobytes. Nothing about the partition table
+    // changes here, so OTA is unaffected.
+    constexpr const char *PARTITION_LABEL = "spiffs";
+    constexpr const char *MOUNT_POINT = "/littlefs";
+    constexpr const char *SHOWS_PATH = "/shows.dat";
 
-    constexpr const char *KEY_VERSION = "shvers";
-    constexpr const char *KEY_RECORD_SIZE = "shrecsz";
-    constexpr const char *KEY_COUNT = "shcount";
+    // Guards against reading a file that isn't ours at all.
+    constexpr uint32_t FILE_MAGIC = 0x53544753; // "STGS"
 
-    // Guards a corrupt or hostile stored size from being used as a length
-    // for a read into a fixed buffer. Comfortably above one show.
-    constexpr size_t MAX_REASONABLE_RECORD_SIZE = 4096;
-
-    void buildRecordKey(uint8_t index, char *buffer, size_t bufferSize)
+    struct Header
     {
-        snprintf(buffer, bufferSize, "show%u", static_cast<unsigned>(index));
-    }
+        uint32_t magic;
+        uint16_t version;
+        uint16_t recordSize;
+        uint8_t count;
+    };
 
-    const uint8_t *recordAt(const void *records, size_t recordSize, uint8_t index)
-    {
-        return static_cast<const uint8_t *>(records) + static_cast<size_t>(index) * recordSize;
-    }
+    bool mounted = false;
+}
 
-    uint8_t *recordAt(void *records, size_t recordSize, uint8_t index)
+void StageLink::ShowStorage::begin()
+{
+    // formatOnFail: a first boot, or a partition that was never a
+    // filesystem, formats once and comes up empty rather than failing
+    // permanently.
+    mounted = LittleFS.begin(true, MOUNT_POINT, 10, PARTITION_LABEL);
+
+    if (!mounted)
     {
-        return static_cast<uint8_t *>(records) + static_cast<size_t>(index) * recordSize;
+        Serial.println("SHOW STORAGE: filesystem mount failed - shows will not persist");
     }
 }
 
 bool StageLink::ShowStorage::save(const void *records, size_t recordSize, uint8_t recordCount)
 {
-    if (records == nullptr || recordSize == 0 || recordSize > MAX_REASONABLE_RECORD_SIZE)
+    if (!mounted || records == nullptr || recordSize == 0)
     {
         return false;
     }
 
-    bool allWritten = true;
+    // Written to a temporary file and renamed over the real one, so a
+    // power loss midway through leaves the previous save intact instead
+    // of a half-written show list.
+    const char *tempPath = "/shows.tmp";
 
-    for (uint8_t i = 0; i < recordCount; ++i)
+    File file = LittleFS.open(tempPath, "w");
+    if (!file)
     {
-        char key[KEY_BUFFER_SIZE];
-        buildRecordKey(i, key, sizeof(key));
-
-        const size_t written =
-            ConfigManager::putBytes(key, recordAt(records, recordSize, i), recordSize);
-
-        if (written != recordSize)
-        {
-            allWritten = false;
-        }
+        return false;
     }
 
-    // The header goes last: until it is written the records aren't
-    // considered valid, so a power loss midway through leaves the
-    // previous save intact rather than a half-written list.
-    ConfigManager::putUInt8(KEY_COUNT, recordCount);
-    ConfigManager::putInt(KEY_RECORD_SIZE, static_cast<int32_t>(recordSize));
-    ConfigManager::putInt(KEY_VERSION, static_cast<int32_t>(LAYOUT_VERSION));
+    Header header;
+    header.magic = FILE_MAGIC;
+    header.version = LAYOUT_VERSION;
+    header.recordSize = static_cast<uint16_t>(recordSize);
+    header.count = recordCount;
 
-    return allWritten;
+    bool ok = file.write(reinterpret_cast<const uint8_t *>(&header), sizeof(header)) == sizeof(header);
+
+    if (ok && recordCount > 0)
+    {
+        const size_t total = recordSize * static_cast<size_t>(recordCount);
+        ok = file.write(static_cast<const uint8_t *>(records), total) == total;
+    }
+
+    file.close();
+
+    if (!ok)
+    {
+        LittleFS.remove(tempPath);
+        return false;
+    }
+
+    LittleFS.remove(SHOWS_PATH);
+
+    return LittleFS.rename(tempPath, SHOWS_PATH);
 }
 
 bool StageLink::ShowStorage::load(
@@ -73,28 +92,36 @@ bool StageLink::ShowStorage::load(
 {
     countOut = 0;
 
-    if (records == nullptr || recordSize == 0)
+    if (!mounted || records == nullptr || recordSize == 0)
     {
         return false;
     }
 
-    if (!ConfigManager::hasKey(KEY_VERSION))
+    File file = LittleFS.open(SHOWS_PATH, "r");
+    if (!file)
     {
         return false; // nothing saved yet - a first boot, not an error
     }
 
-    const int32_t storedVersion = ConfigManager::getInt(KEY_VERSION, -1);
-    const int32_t storedRecordSize = ConfigManager::getInt(KEY_RECORD_SIZE, -1);
-
-    // Both must agree with this firmware. See ShowStorage.h on why a
-    // mismatch discards rather than attempts a best-effort read.
-    if (storedVersion != static_cast<int32_t>(LAYOUT_VERSION)
-        || storedRecordSize != static_cast<int32_t>(recordSize))
+    Header header;
+    if (file.read(reinterpret_cast<uint8_t *>(&header), sizeof(header)) != sizeof(header))
     {
+        file.close();
         return false;
     }
 
-    uint8_t storedCount = ConfigManager::getUInt8(KEY_COUNT, 0);
+    // Magic, version and record size all have to agree with this
+    // firmware. See ShowStorage.h on why a mismatch discards rather than
+    // attempting a best-effort read.
+    if (header.magic != FILE_MAGIC
+        || header.version != LAYOUT_VERSION
+        || header.recordSize != static_cast<uint16_t>(recordSize))
+    {
+        file.close();
+        return false;
+    }
+
+    uint8_t storedCount = header.count;
     if (storedCount > maxRecords)
     {
         storedCount = maxRecords;
@@ -102,43 +129,28 @@ bool StageLink::ShowStorage::load(
 
     for (uint8_t i = 0; i < storedCount; ++i)
     {
-        char key[KEY_BUFFER_SIZE];
-        buildRecordKey(i, key, sizeof(key));
+        uint8_t *destination = static_cast<uint8_t *>(records) + static_cast<size_t>(i) * recordSize;
 
-        const size_t read =
-            ConfigManager::getBytes(key, recordAt(records, recordSize, i), recordSize);
-
-        if (read != recordSize)
+        if (file.read(destination, recordSize) != static_cast<int>(recordSize))
         {
-            // A short record means the list is not what the header
-            // claims, so stop and keep only what read cleanly.
+            // Short file - keep whatever read cleanly rather than
+            // reporting shows that aren't fully there.
+            file.close();
             countOut = i;
             return i > 0;
         }
     }
 
+    file.close();
     countOut = storedCount;
+
     return true;
 }
 
 void StageLink::ShowStorage::clear()
 {
-    // The header first - that alone makes load() report nothing saved,
-    // so an interrupted clear can't leave records looking valid.
-    ConfigManager::removeKey(KEY_VERSION);
-    ConfigManager::removeKey(KEY_RECORD_SIZE);
-    ConfigManager::removeKey(KEY_COUNT);
-
-    for (uint8_t i = 0; i < 255; ++i)
+    if (mounted)
     {
-        char key[KEY_BUFFER_SIZE];
-        buildRecordKey(i, key, sizeof(key));
-
-        if (!ConfigManager::hasKey(key))
-        {
-            break;
-        }
-
-        ConfigManager::removeKey(key);
+        LittleFS.remove(SHOWS_PATH);
     }
 }

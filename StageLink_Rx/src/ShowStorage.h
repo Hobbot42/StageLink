@@ -13,9 +13,11 @@
 // operator loses saved shows, which is far better than a show that
 // executes garbage on real hardware.
 //
-// One record per key rather than one big blob: NVS stores each entry
-// whole, so a single-show edit rewrites one show's worth of flash
-// instead of the entire list.
+// Stored as one file on the LittleFS partition rather than in NVS. NVS
+// is only 20KB and shared with WiFi calibration and every setting, which
+// capped the whole show list at a few kilobytes; the data partition in
+// the standard ESP32 table is 1.4MB and was otherwise unused. The
+// partition table itself is unchanged, so OTA still works.
 // Belongs to: StageLink_Rx - shows live on the RxQ (see CLAUDE.md).
 
 #pragma once
@@ -30,11 +32,16 @@ namespace StageLink
     public:
         // Bump whenever the stored show/cue/action layout changes. See
         // the file comment for what a mismatch does.
-        static constexpr uint16_t LAYOUT_VERSION = 2;
+        static constexpr uint16_t LAYOUT_VERSION = 4;
 
-        // Writes showCount records of recordSize bytes each, plus the
-        // version/size/count header used to validate them on load.
-        // Returns false if any record fails to write.
+        // Mounts the filesystem. Call once at startup, before load().
+        static void begin();
+
+        // Writes recordCount records of recordSize bytes each, plus the
+        // magic/version/size/count header used to validate them on load.
+        // Written to a temporary file and renamed into place, so an
+        // interrupted save leaves the previous one intact. Returns false
+        // if the write fails.
         static bool save(const void *records, size_t recordSize, uint8_t recordCount);
 
         // Fills up to maxRecords records and reports how many were read.

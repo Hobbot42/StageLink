@@ -88,6 +88,13 @@ public:
     // distinct behavior of their own for now.
     void handlePress();
 
+    // Confirm held down rather than tapped. Only the name-entry screens
+    // use it, where it wipes the name being typed so it can be entered
+    // from scratch instead of dialled through character by character.
+    // A no-op everywhere else - a hold that does nothing is better than
+    // one that does something different on every screen.
+    void handleHoldConfirm();
+
     // Back/cancel, depending on the screen - from a root screen (Show
     // Run/Show Select/Show List/Setup List) this goes up to the Mode
     // Menu; from the Mode Menu itself it does nothing (top of the
@@ -112,7 +119,8 @@ private:
         CueOptions,   // Edit / Rename / Fade Time / Copy / Move / Delete
         CueFadeEntry, // how long the cue takes to reach its values on GO
         ActionList,
-        ActionOptions, // Edit / Move Up / Move Down / Delete for one action
+        ActionOptions,   // Edit / Delay / Fade / Move / Delete for one action
+        ActionTimeEntry, // the action's delay or fade - see editingActionFade_
         OutputSelect,
         CommandSelect,
         ValueEntry,
@@ -278,10 +286,24 @@ private:
 
     RenameTarget renameTarget_ = RenameTarget::Show;
 
-    // Cue fade being dialled in, in tenths of a second. Held here rather
-    // than written straight through, so backing out of the screen leaves
-    // the stored cue alone.
+    // Timing being dialled in, in tenths of a second. Held here rather
+    // than written straight through, so backing out of a screen leaves
+    // the stored value alone. editingActionFade_ selects which of the
+    // action's two times Screen::ActionTimeEntry is editing.
     uint16_t editFadeTenths_ = 0;
+    uint16_t editActionTimeTenths_ = 0;
+    bool editingActionFade_ = false;
+
+    // Timing carried through an action edit. buildActions() rewrites an
+    // action from scratch, so without these an edit would silently reset
+    // the delay and fade the operator had set on it.
+    // True while a just-created cue is having its fade set, so confirming
+    // that goes on into the cue's actions instead of back to the cue list
+    // the way editing an existing cue's fade does.
+    bool newCueFlow_ = false;
+
+    uint16_t pendingDelayTenths_ = 0;
+    uint16_t pendingFadeTenths_ = ACTION_FADE_FROM_CUE;
 
     // Range of stored actions the open edit flow will replace on commit.
     // editGroupLength_ 0 means "inserting a new action".
