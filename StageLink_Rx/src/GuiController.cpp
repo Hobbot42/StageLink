@@ -865,7 +865,8 @@ void GuiController::handleRotate(int direction)
             break;
 
         case Screen::CueList:
-            currentSelection() = wrapIndex(currentSelection(), step, showEngine_->getCueCount() + 1);
+            // Cues, then "+ Add Cue", then "Done Programming".
+            currentSelection() = wrapIndex(currentSelection(), step, showEngine_->getCueCount() + 2);
             break;
 
         case Screen::ShowOptions:
@@ -1050,7 +1051,12 @@ void GuiController::handlePress()
         {
             const uint8_t cueCount = showEngine_->getCueCount();
 
-            if (currentSelection() == cueCount) // "+ Add Cue"
+            if (currentSelection() == cueCount + 1) // "Done Programming"
+            {
+                stackDepth_ = 1;
+                stack_[0] = { Screen::ModeMenu, 0 };
+            }
+            else if (currentSelection() == cueCount) // "+ Add Cue"
             {
                 if (showEngine_->addCue())
                 {
@@ -1358,10 +1364,25 @@ void GuiController::handlePress()
             break;
 
         case Screen::CueFadeEntry:
-            // Confirms the dialled time and steps back to the cue's option
-            // menu, which shows the new value on its Fade Time row.
+            // Confirms the dialled time and goes back out to the cue list
+            // rather than the option menu it was opened from - the time is
+            // set, so the list is where the next thing happens. Each pop
+            // is guarded rather than assumed, so this can't walk off the
+            // stack if the screen is ever reached another way.
             showEngine_->setCueFadeTenths(currentCueIndex_, editFadeTenths_);
+
             popScreen();
+            if (currentScreen() == Screen::CueOptions)
+            {
+                popScreen();
+            }
+
+            // Lands on the cue just changed, so the new time is under the
+            // cursor instead of the operator having to find it again.
+            if (currentScreen() == Screen::CueList)
+            {
+                currentSelection() = currentCueIndex_;
+            }
             break;
 
         case Screen::SetupList:
@@ -1534,7 +1555,7 @@ void GuiController::render()
             const uint8_t cueCount = showEngine_->getCueCount();
             uint8_t count = 0;
 
-            for (uint8_t i = 0; i < cueCount && count < MAX_LIST_ITEMS - 1; ++i)
+            for (uint8_t i = 0; i < cueCount && count < MAX_LIST_ITEMS - 2; ++i)
             {
                 // The Q number is the position, generated here rather
                 // than stored - see ShowEngine.h. The fade time sits
@@ -1554,6 +1575,7 @@ void GuiController::render()
             }
 
             itemPointers_[count++] = "+ Add Cue";
+            itemPointers_[count++] = DONE_PROGRAMMING_ITEM;
 
             Display::showGuiList(
                 "CUES", showEngine_->getShowName(), itemPointers_, count, currentSelection()
